@@ -85,14 +85,6 @@ def _vcpkg_repo_impl(repo_ctx):
     if vcpkg_install.return_code != 0:
         fail("vcpkg install failed: %s" % vcpkg_install.stderr)
 
-    # list_packages = repo_ctx.execute([
-    #     "ls", "-lisa", "vcpkg_installed/vcpkg/",
-    # ])
-    # print(list_packages.stdout)
-
-    # print(repo_ctx.read("vcpkg_installed/vcpkg/vcpkg-running.lock"))
-    # print(repo_ctx.read("vcpkg_installed/vcpkg/info/fmt_12.1.0_arm64-osx.list"))
-
 
     vcpkg_list_installed_packages = repo_ctx.execute([
             "vcpkg", "list",
@@ -121,16 +113,39 @@ def _vcpkg_repo_impl(repo_ctx):
     build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_import")
     """
-    def generate_targets(pkg_name, files):
+    def generate_targets(pkg_name, files, include_prefix):
         into_literal_starlark_list = lambda l: "[%s]" % (",".join(["\"%s\"" % (v) for v in l]))
+        # TODO(TheGrizzlyDev): add support for select based on @bazel_tools//src/conditions:debug that uses debug libraries
+        # TODO(TheGrizzlyDev): this filtering of debugging libs is very brittle
+        files_with_extension = lambda *extensions: [f for f in files if f.endswith(extensions) and f.find("debug") < 0]
+        shared_libraries = files_with_extension(".so", ".dll", ".dylib", ".pyd")
+        static_archives = files_with_extension(".a", ".pic.a", ".lib")
+        library_attribute = "system_provided = True"
+        if len(static_archives) > 0:
+            library_attribute = "static_library = \"%s\"" % (static_archives[0])
+        elif len(shared_libraries) > 0:
+            library_attribute = "shared_library = \"%s\"" % (shared_libraries[0])
         return """
 filegroup(
     name = "{pkg_name}_data",
     srcs = {files_list},
+    visibility = ["//visibility:public"],
+)
+
+cc_import(
+    name = "{pkg_name}",
+    hdrs = {hdrs_list},
+    data = ["{pkg_name}_data"],
+    {library_attribute},
+    visibility = ["//visibility:public"],
+    strip_include_prefix = "{include_prefix}",
 )
     """.format(
         pkg_name=pkg_name,
-        files_list=into_literal_starlark_list([f for f in files if not f.endswith("/")]),
+        files_list=into_literal_starlark_list(files),
+        hdrs_list=into_literal_starlark_list(files_with_extension(".h", ".hpp", ".hxx", ".hh")),
+        library_attribute=library_attribute,
+        include_prefix=include_prefix
     )
 
     for package in packages:
@@ -144,9 +159,10 @@ filegroup(
             version=version,
         )).splitlines()
 
-        files = ["vcpkg_installed/%s" % (file) for file in pkg_list]
+        include_prefix = "vcpkg_installed/%s/include" % (triplet)
+        files = ["vcpkg_installed/%s" % (file) for file in pkg_list if not file.endswith("/")]
 
-        build_file_content += generate_targets(pkg_name, files)
+        build_file_content += generate_targets(pkg_name, files, include_prefix)
 
     print(build_file_content)
     repo_ctx.file("BUILD", build_file_content)
