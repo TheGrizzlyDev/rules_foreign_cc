@@ -162,7 +162,7 @@ vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
 vcpkg.source(
     name = "vcpkg_deps",
     manifest = "//vcpkg:vcpkg.json",
-    triplet = "x64-linux",
+    triplet = "arm64-osx",
 )
 
 use_repo(vcpkg, "vcpkg_deps")

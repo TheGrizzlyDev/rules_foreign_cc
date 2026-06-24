@@ -225,8 +225,8 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "fPdbMRRQTQEMsd6HtyfhrXEGhynktJxlcoWtLhwWIcI=",
-        "usagesDigest": "/AUutfWFAadNezMemBtdLTpOkBii3haXLcYALP/LJm8=",
+        "bzlTransitiveDigest": "RgzE44EERZ02DEt+863L3JwFbBQxqlOdL3K6G3xzhKk=",
+        "usagesDigest": "lhSTwxXmWasmbtVTDcVG3UFYMLOXtt48AG867EkQbhE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -246,7 +246,7 @@
             "repoRuleId": "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg_repo",
             "attributes": {
               "manifest": "@@//vcpkg:vcpkg.json",
-              "triplet": "x64-linux",
+              "triplet": "arm64-osx",
               "vcpkg_root": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
             }
           }
