@@ -223,6 +223,63 @@
         ]
       }
     },
+    "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
+      "general": {
+        "bzlTransitiveDigest": "fPdbMRRQTQEMsd6HtyfhrXEGhynktJxlcoWtLhwWIcI=",
+        "usagesDigest": "/AUutfWFAadNezMemBtdLTpOkBii3haXLcYALP/LJm8=",
+        "recordedFileInputs": {},
+        "recordedDirentsInputs": {},
+        "envVariables": {},
+        "generatedRepoSpecs": {
+          "vcpkg_root_default_vcpkg_root": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/microsoft/vcpkg/archive/refs/tags/2026.06.01.tar.gz"
+              ],
+              "strip_prefix": "vcpkg-2026.06.01",
+              "sha256": "d394626f9205790915c70e1281eb08554e8d72ac0677334893e32636ae08ec3d",
+              "build_file_content": "exports_files(glob(['**']))"
+            }
+          },
+          "vcpkg_deps": {
+            "repoRuleId": "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg_repo",
+            "attributes": {
+              "manifest": "@@//vcpkg:vcpkg.json",
+              "triplet": "x64-linux",
+              "vcpkg_root": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+            }
+          }
+        },
+        "recordedRepoMappingEntries": [
+          [
+            "bazel_features+",
+            "bazel_features_globals",
+            "bazel_features++version_extension+bazel_features_globals"
+          ],
+          [
+            "bazel_features+",
+            "bazel_features_version",
+            "bazel_features++version_extension+bazel_features_version"
+          ],
+          [
+            "rules_foreign_cc+",
+            "bazel_features",
+            "bazel_features+"
+          ],
+          [
+            "rules_foreign_cc+",
+            "bazel_tools",
+            "bazel_tools"
+          ],
+          [
+            "rules_foreign_cc+",
+            "rules_foreign_cc",
+            "rules_foreign_cc+"
+          ]
+        ]
+      }
+    },
     "@@rules_fuzzing+//fuzzing/private:extensions.bzl%non_module_dependencies": {
       "general": {
         "bzlTransitiveDigest": "4LouzhF/yT117s7peGnNs9ROomiJXC6Zl5R0oI21jho=",
