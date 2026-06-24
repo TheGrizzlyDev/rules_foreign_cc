@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "RgzE44EERZ02DEt+863L3JwFbBQxqlOdL3K6G3xzhKk=",
+        "bzlTransitiveDigest": "ST9ADUA0nw7dIo/V9aBkIs9fFWzOHQ2Dl0ZosiSpqns=",
         "usagesDigest": "lhSTwxXmWasmbtVTDcVG3UFYMLOXtt48AG867EkQbhE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},

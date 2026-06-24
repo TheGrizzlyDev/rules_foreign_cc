@@ -71,41 +71,84 @@ def _vcpkg_repo_impl(repo_ctx):
     vcpkg_root_dir = vcpkg_root_doc.dirname # Gets the root directory containing the file .vcpkg-root AKA the actual vcpkg root directory
 
     triplet = repo_ctx.attr.triplet
-    vcpkg_install = repo_ctx.execute(
-        [
+    vcpkg_env = {
+        "VCPKG_ROOT": str(vcpkg_root_dir),
+    }
+    vcpkg_install = repo_ctx.execute([
             "vcpkg", "install",
             "--x-install-root=vcpkg_installed",
             "--triplet=" + triplet
         ],
-        environment = {
-            "VCPKG_ROOT": str(vcpkg_root_dir),
-        }
+        environment = vcpkg_env
     )
 
     if vcpkg_install.return_code != 0:
         fail("vcpkg install failed: %s" % vcpkg_install.stderr)
 
-    installed_path = lambda fragment: "vcpkg_installed/%s/%s" % (triplet, fragment)
-    share_dir = installed_path("share")
-    bin_dir = installed_path("bin")
-    lib_dir = installed_path("lib")
-    include_dir = installed_path("include")
+    # list_packages = repo_ctx.execute([
+    #     "ls", "-lisa", "vcpkg_installed/vcpkg/",
+    # ])
+    # print(list_packages.stdout)
+
+    # print(repo_ctx.read("vcpkg_installed/vcpkg/vcpkg-running.lock"))
+    # print(repo_ctx.read("vcpkg_installed/vcpkg/info/fmt_12.1.0_arm64-osx.list"))
+
+
+    vcpkg_list_installed_packages = repo_ctx.execute([
+            "vcpkg", "list",
+            "--x-install-root=vcpkg_installed"
+        ],
+        environment = vcpkg_env)
+    
+    if vcpkg_list_installed_packages.return_code != 0:
+        fail("Failed to query installed vcpkg packages: %s" % vcpkg_list_installed_packages.stderr)
+
+    packages = []
+    for line in vcpkg_list_installed_packages.stdout.splitlines():
+        parts = line.strip().split(' ', 1)
+        if len(parts) < 2:
+            continue  # Skip malformed or empty lines
+        line = parts[1]
+            
+        pkg_and_triplet = parts[0].split(":")
+        pkg_name = pkg_and_triplet[0]
+        triplet = pkg_and_triplet[1]
+        
+        version = line.strip().split(' ', 1)[0]
+
+        packages.append((pkg_name, triplet, version))
 
     build_file_content = """
 load("@rules_cc//cc:defs.bzl", "cc_import")
     """
-    def generate_cc_import(name):
+    def generate_targets(pkg_name, files):
+        into_listeral_starlark_list = lambda l: "[%s]" % (",".join(["\"%s\"" % (v) for v in l]))
         return """
-cc_import(
-    name = "fmt",
-    hdrs = glob(["{inc}/**/*.h", "{inc}/**/*.hpp"], allow_empty=True),
-    strip_include_prefix = "{inc}",
-    visibility = ["//visibility:public"],
+filegroup(
+    name = "{pkg_name}_data",
+    srcs = {files_list},
 )
-""".format(inc=include_dir, lib=lib_dir)
+    """.format(
+        pkg_name=pkg_name,
+        files_list=into_listeral_starlark_list([f for f in files if not f.endswith("/")]),
+    )
 
-    build_file_content += generate_cc_import("fmt")
+    for package in packages:
+        print("Found package: ", package)
+        pkg_name = package[0]
+        triplet = package[1]
+        version = package[2]
+        pkg_list = repo_ctx.read("vcpkg_installed/vcpkg/info/{pkg_name}_{version}_{triplet}.list".format(
+            pkg_name=pkg_name,
+            triplet=triplet,
+            version=version,
+        )).splitlines()
 
+        files = ["vcpkg_installed/%s" % (file) for file in pkg_list]
+
+        build_file_content += generate_targets(pkg_name, files)
+
+    print(build_file_content)
     repo_ctx.file("BUILD", build_file_content)
 
 
