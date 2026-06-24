@@ -122,7 +122,7 @@ def _vcpkg_repo_impl(repo_ctx):
 load("@rules_cc//cc:defs.bzl", "cc_import")
     """
     def generate_targets(pkg_name, files):
-        into_listeral_starlark_list = lambda l: "[%s]" % (",".join(["\"%s\"" % (v) for v in l]))
+        into_literal_starlark_list = lambda l: "[%s]" % (",".join(["\"%s\"" % (v) for v in l]))
         return """
 filegroup(
     name = "{pkg_name}_data",
@@ -130,7 +130,7 @@ filegroup(
 )
     """.format(
         pkg_name=pkg_name,
-        files_list=into_listeral_starlark_list([f for f in files if not f.endswith("/")]),
+        files_list=into_literal_starlark_list([f for f in files if not f.endswith("/")]),
     )
 
     for package in packages:
