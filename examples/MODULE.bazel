@@ -156,3 +156,13 @@ filegroup(
 """,
     path = "integration_tests/detect_root_test/dir1",
 )
+
+vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
+
+vcpkg.source(
+    name = "vcpkg_deps",
+    manifest = "//:vcpkg.json",
+    triplet = "x64-linux",
+)
+
+use_repo(vcpkg, "vcpkg_deps")
