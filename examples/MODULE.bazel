@@ -162,7 +162,6 @@ vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
 vcpkg.source(
     name = "vcpkg_deps",
     manifest = "//vcpkg:vcpkg.json",
-    manifest_lock = "//vcpkg:vcpkg.bzlmod.lock",
     triplet = "arm64-osx",
 )
 

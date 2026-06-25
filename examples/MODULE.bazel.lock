@@ -225,8 +225,8 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "6mCxJQZVm++eq/R3kgzOlm7RV97bRPmz5KEXLfBEm7c=",
-        "usagesDigest": "EUlMvMVv7/1vho0PPaHIEdN0YlpmSDEhu7JV3a/dQKQ=",
+        "bzlTransitiveDigest": "rQD/L0Y/GW5RD4AphL4jRhdxMmawzaz6/FabGKIipsE=",
+        "usagesDigest": "lhSTwxXmWasmbtVTDcVG3UFYMLOXtt48AG867EkQbhE=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -247,8 +247,7 @@
             "attributes": {
               "manifest": "@@//vcpkg:vcpkg.json",
               "triplet": "arm64-osx",
-              "vcpkg_root": "vcpkg_root_default_vcpkg_root",
-              "manifest_lock": "@@//vcpkg:vcpkg.bzlmod.lock"
+              "vcpkg_root": "vcpkg_root_default_vcpkg_root"
             }
           }
         },
