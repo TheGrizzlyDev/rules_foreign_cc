@@ -3,5 +3,8 @@ exports_files(["vcpkg.json", "vcpkg.bzlmod.lock"])
 cc_binary(
     name = "main",
     srcs = ["main.cpp"],
-    deps = ["@vcpkg_deps//:fmt"],
+    deps = [
+        "@vcpkg_deps//:fmt",
+        "@vcpkg_deps//:jsoncpp",
+    ],
 )

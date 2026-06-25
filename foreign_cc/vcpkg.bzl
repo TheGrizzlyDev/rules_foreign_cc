@@ -43,12 +43,19 @@ while IFS= read -r line || [ -n "$line" ]; do
   esac
 
   # Filter: debug builds, tools, shared docs, pkgconfig files.
+  # TODO(TheGrizzlyDev): export share/ — vcpkg writes CMake config files
+  # there (needed once we wire up find_package-style consumption).
+  # TODO(TheGrizzlyDev): export *pkgconfig/* entries for consumers that drive
+  # linkage through pkg-config rather than direct -l flags.
   case "$rel" in
     debug/*|tools/*|share/*) continue ;;
     *pkgconfig/*) continue ;;
   esac
 
   # Only export include/ and lib/ for the simple version.
+  # TODO(TheGrizzlyDev): add bin/ for Windows — vcpkg places DLLs there,
+  # and the relative-symlink strategy below won't work on Windows either:
+  # we'll need junctions or a copy tree.
   case "$rel" in
     include/*|lib/*) ;;
     *) continue ;;
@@ -104,6 +111,10 @@ def _vcpkg_export_impl(ctx):
         progress_message = "vcpkg_export: linking {} ({})".format(ctx.attr.package, ctx.attr.triplet),
     )
 
+    # TODO(TheGrizzlyDev): derive library_names from the package .list file
+    # (lib/lib*.{a,dylib,so} entries) rather than guessing [package]. Requires
+    # a map_directory-style step so the libraries are visible at analysis time
+    # — without it the linking_context can't be populated correctly.
     library_names = ctx.attr.library_names or [ctx.attr.package]
     link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
 
