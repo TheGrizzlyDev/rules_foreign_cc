@@ -167,8 +167,17 @@ vcpkg_export = rule(
 def _vcpkg_install_impl(ctx):
     install_tree = ctx.actions.declare_directory("%s_install_tree" % ctx.attr.name)
 
+    home_dir = ctx.actions.declare_directory("%s_home" % ctx.attr.name)
+    ctx.actions.run_shell(
+        outputs = [home_dir],
+        command = "mkdir -p \"$1\"",
+        arguments = [home_dir.path],
+        mnemonic = "VcpkgInstallHome",
+        progress_message = "vcpkg_install: creating empty HOME for {}".format(ctx.attr.name),
+    )
+
     root_files = ctx.attr.root[DefaultInfo].files.to_list()
-    declared_inputs = [ctx.file.manifest] + root_files
+    declared_inputs = [ctx.file.manifest, home_dir] + root_files
 
     inputs = InputFiles(
         headers = [],
@@ -182,6 +191,7 @@ def _vcpkg_install_impl(ctx):
     )
 
     user_script_lines = [
+        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_dir.path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
