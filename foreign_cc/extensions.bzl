@@ -65,28 +65,40 @@ tools = module_extension(
 def _vcpkg_repo_impl(repo_ctx):
     vcpkg_install_target_name = "install_tree"
 
-    build_file_content_template = """
-load("@rules_foreign_cc//foreign_cc:vcpkg.bzl", "vcpkg_install", "vcpkg_export")
+    manifest_path = repo_ctx.path(repo_ctx.attr.manifest)
+    manifest = json.decode(repo_ctx.read(manifest_path))
+    packages = []
+    for dep in manifest.get("dependencies", []):
+        if type(dep) == "string":
+            packages.append(dep)
+        else:
+            packages.append(dep["name"])
 
-vcpkg_install(
-    name = "{vcpkg_install_target_name}",
-    root = "@{vcpkg_root}//:srcs",
-    root_file = "@{vcpkg_root}//:.vcpkg-root",
-    manifest = "{manifest}",
-    triplet = "{triplet}",
-)
-    """
+    lines = [
+        "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
+        "",
+        "vcpkg_install(",
+        "    name = \"{}\",".format(vcpkg_install_target_name),
+        "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
+        "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
+        "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
+        "    triplet = \"{}\",".format(repo_ctx.attr.triplet),
+        ")",
+        "",
+    ]
+    for pkg in packages:
+        lines += [
+            "vcpkg_export(",
+            "    name = \"{}\",".format(pkg),
+            "    install_tree = \":{}\",".format(vcpkg_install_target_name),
+            "    package = \"{}\",".format(pkg),
+            "    triplet = \"{}\",".format(repo_ctx.attr.triplet),
+            "    visibility = [\"//visibility:public\"],",
+            ")",
+            "",
+        ]
 
-    # TODO(TheGrizzlyDev): parse vcpkg.json to list all the packages. For each of them, create a vcpkg_export target
-
-    build_file_content = build_file_content_template.format(
-        vcpkg_install_target_name=vcpkg_install_target_name,
-        vcpkg_root=repo_ctx.attr.vcpkg_root,
-        manifest=repo_ctx.attr.manifest,
-        triplet=repo_ctx.attr.triplet,
-    )
-    print(build_file_content)
-    repo_ctx.file("BUILD", build_file_content)
+    repo_ctx.file("BUILD", "\n".join(lines))
 
 vcpkg_repo = repository_rule(
     implementation = _vcpkg_repo_impl,
