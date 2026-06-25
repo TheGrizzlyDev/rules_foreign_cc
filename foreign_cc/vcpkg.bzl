@@ -111,12 +111,21 @@ def _vcpkg_export_impl(ctx):
         progress_message = "vcpkg_export: linking {} ({})".format(ctx.attr.package, ctx.attr.triplet),
     )
 
-    # TODO(TheGrizzlyDev): derive library_names from the package .list file
-    # (lib/lib*.{a,dylib,so} entries) rather than guessing [package]. Requires
-    # a map_directory-style step so the libraries are visible at analysis time
-    # — without it the linking_context can't be populated correctly.
-    library_names = ctx.attr.library_names or [ctx.attr.package]
-    link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
+    # Resolution order for link flags:
+    #   1. out_headers_only=True -> no -l flags at all.
+    #   2. Any of out_static_libs/out_shared_libs/out_interface_libs set -> use them.
+    #   3. Fallback: guess [package] as the single -l<package> name.
+    # TODO(TheGrizzlyDev): when an override is absent, derive the names from
+    # the package `.list` file via map_directory; the [package] heuristic in
+    # branch 3 is the last-resort default until that lands. The explicit
+    # out_* attrs (typically set via vcpkg.package_override in MODULE.bazel)
+    # remain as the manual escape hatch even after map_directory ships.
+    if ctx.attr.out_headers_only:
+        link_flags = []
+    else:
+        explicit_libs = ctx.attr.out_static_libs + ctx.attr.out_shared_libs + ctx.attr.out_interface_libs
+        library_names = explicit_libs if explicit_libs else [ctx.attr.package]
+        link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
 
     compilation_context = cc_common.create_compilation_context(
         headers = depset([export_dir]),
@@ -160,8 +169,24 @@ vcpkg_export = rule(
             doc = "A vcpkg_install target whose install tree contains this package.",
             mandatory = True,
         ),
-        "library_names": attr.string_list(
-            doc = "Library basenames to link (passed as `-l<name>`). Defaults to [package].",
+        "out_binaries": attr.string_list(
+            doc = "Names of installed binaries (forward-compat; not yet used for CcInfo).",
+            default = [],
+        ),
+        "out_headers_only": attr.bool(
+            doc = "If True, no -l flags are emitted (header-only package).",
+            default = False,
+        ),
+        "out_interface_libs": attr.string_list(
+            doc = "Interface library basenames to link (passed as `-l<name>`).",
+            default = [],
+        ),
+        "out_shared_libs": attr.string_list(
+            doc = "Shared library basenames to link (passed as `-l<name>`).",
+            default = [],
+        ),
+        "out_static_libs": attr.string_list(
+            doc = "Static library basenames to link (passed as `-l<name>`).",
             default = [],
         ),
         "package": attr.string(

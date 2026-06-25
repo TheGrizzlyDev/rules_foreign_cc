@@ -2,6 +2,8 @@ load("@rules_python//python/pip_install:requirements.bzl", "compile_pip_requirem
 
 exports_files([
     "cc_wrapper.sh",
+    "vcpkg.json",
+    "vcpkg.bzlmod.lock",
 ])
 
 test_suite(

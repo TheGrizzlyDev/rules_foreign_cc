@@ -1,0 +1,3 @@
+{
+  "dependencies": ["bzip2", "fmt", "jsoncpp"]
+}

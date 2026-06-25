@@ -225,8 +225,8 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "6DkdNvNohPKTtAgu3ihtixrRKrosyDr+jtnLuNiMSYI=",
-        "usagesDigest": "lhSTwxXmWasmbtVTDcVG3UFYMLOXtt48AG867EkQbhE=",
+        "bzlTransitiveDigest": "s71nMmNgDbEuX6sollI5vNBtMHmyLU3HyQuYUQ6tZ8w=",
+        "usagesDigest": "W0Qbp1DON0B/RMZIc9pjFxZDzB8H6xnFrT7E+iYPpcU=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -245,9 +245,10 @@
           "vcpkg_deps": {
             "repoRuleId": "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg_repo",
             "attributes": {
-              "manifest": "@@//vcpkg:vcpkg.json",
+              "manifest": "@@//:vcpkg.json",
               "triplet": "arm64-osx",
-              "vcpkg_root": "vcpkg_root_default_vcpkg_root"
+              "vcpkg_root": "vcpkg_root_default_vcpkg_root",
+              "overrides_json": "[{\"out_binaries\":[],\"out_headers_only\":false,\"out_interface_libs\":[],\"out_shared_libs\":[],\"out_static_libs\":[\"bz2\"],\"package\":\"bzip2\"}]"
             }
           }
         },

@@ -1,5 +1,3 @@
-exports_files(["vcpkg.json", "vcpkg.bzlmod.lock"])
-
 cc_binary(
     name = "main",
     srcs = ["main.cpp"],

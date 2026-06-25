@@ -62,6 +62,13 @@ tools = module_extension(
 # TODO(TheGrizzlyDev): split the code below
 # TODO(TheGrizzlyDev): install vcpkg, patchelf hermetically
 # TODO(TheGrizzlyDev): add doc
+_OVERRIDE_LIST_FIELDS = (
+    "out_static_libs",
+    "out_shared_libs",
+    "out_interface_libs",
+    "out_binaries",
+)
+
 def _vcpkg_repo_impl(repo_ctx):
     vcpkg_install_target_name = "install_tree"
 
@@ -73,6 +80,10 @@ def _vcpkg_repo_impl(repo_ctx):
             packages.append(dep)
         else:
             packages.append(dep["name"])
+
+    overrides_by_pkg = {}
+    for ov in json.decode(repo_ctx.attr.overrides_json):
+        overrides_by_pkg[ov["package"]] = ov
 
     lines = [
         "load(\"@bazel_skylib//rules/directory:directory.bzl\", \"directory\")",
@@ -94,16 +105,30 @@ def _vcpkg_repo_impl(repo_ctx):
         "",
     ]
     for pkg in packages:
-        lines += [
+        block = [
             "vcpkg_export(",
             "    name = \"{}\",".format(pkg),
             "    install_tree = \":{}\",".format(vcpkg_install_target_name),
             "    package = \"{}\",".format(pkg),
             "    triplet = \"{}\",".format(repo_ctx.attr.triplet),
+        ]
+
+        ov = overrides_by_pkg.get(pkg)
+        if ov:
+            for field in _OVERRIDE_LIST_FIELDS:
+                value = ov.get(field) or []
+                if value:
+                    rendered = ", ".join(["\"{}\"".format(v) for v in value])
+                    block.append("    {} = [{}],".format(field, rendered))
+            if ov.get("out_headers_only"):
+                block.append("    out_headers_only = True,")
+
+        block += [
             "    visibility = [\"//visibility:public\"],",
             ")",
             "",
         ]
+        lines += block
 
     repo_ctx.file("BUILD", "\n".join(lines))
 
@@ -111,6 +136,10 @@ vcpkg_repo = repository_rule(
     implementation = _vcpkg_repo_impl,
     attrs = {
         "manifest": attr.label(allow_single_file=True), # TODO(TheGrizzlyDev): add doc
+        "overrides_json": attr.string(
+            default = "[]",
+            doc = "JSON-encoded list of per-package override dicts. See vcpkg.package_override.",
+        ),
         "triplet": attr.string(), # TODO(TheGrizzlyDev): add doc
         "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
     }
@@ -130,6 +159,28 @@ vcpkg_source = tag_class(attrs = {
     "manifest": attr.label(default = "@__main__//:vcpkg.json", allow_single_file=True), # TODO(TheGrizzlyDev): add doc
     "triplet": attr.string(), # TODO(TheGrizzlyDev): add doc
     "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME) # TODO(TheGrizzlyDev): add doc
+})
+
+# TODO(TheGrizzlyDev): add doc — per-package output overrides spliced onto the
+# generated vcpkg_export(...) calls. Mirrors the out_* attrs on vcpkg_export.
+vcpkg_package_override = tag_class(attrs = {
+    "source": attr.string(
+        doc = "The name of the vcpkg.source repo these overrides apply to.",
+        mandatory = True,
+    ),
+    "package": attr.string(
+        doc = "vcpkg package name to override.",
+        mandatory = True,
+    ),
+    "triplets": attr.string_list(
+        doc = "If non-empty, restricts the override to these triplets.",
+        default = [],
+    ),
+    "out_static_libs": attr.string_list(default = []),
+    "out_shared_libs": attr.string_list(default = []),
+    "out_interface_libs": attr.string_list(default = []),
+    "out_binaries": attr.string_list(default = []),
+    "out_headers_only": attr.bool(default = False),
 })
 
 VCPKG_ROOT_BUILD_FILE = """
@@ -170,13 +221,33 @@ def _vcpkg_mod(module_ctx):
             build_file_content = VCPKG_ROOT_BUILD_FILE,
         )
         
+    # Collect overrides per source name; filter by triplet later, per vcpkg.source.
+    overrides_by_source = {}
+    for mod in module_ctx.modules:
+        for ov in mod.tags.package_override:
+            overrides_by_source.setdefault(ov.source, []).append(ov)
+
     for mod in module_ctx.modules:
         for source in mod.tags.source:
+            applicable = []
+            for ov in overrides_by_source.get(source.name, []):
+                if ov.triplets and source.triplet not in ov.triplets:
+                    continue
+                applicable.append({
+                    "package": ov.package,
+                    "out_static_libs": ov.out_static_libs,
+                    "out_shared_libs": ov.out_shared_libs,
+                    "out_interface_libs": ov.out_interface_libs,
+                    "out_binaries": ov.out_binaries,
+                    "out_headers_only": ov.out_headers_only,
+                })
+
             vcpkg_repo(
                 name = source.name,
                 manifest = source.manifest,
                 triplet = source.triplet,
                 vcpkg_root = vcpkg_repo_name(source.root),
+                overrides_json = json.encode(applicable),
             )
     return None
 
@@ -187,5 +258,6 @@ vcpkg = module_extension(
     tag_classes = {
         "vcpkg_root_http_archive": vcpkg_root_http_archive,
         "source": vcpkg_source,
+        "package_override": vcpkg_package_override,
     }
 )
