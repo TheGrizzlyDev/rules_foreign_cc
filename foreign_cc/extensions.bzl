@@ -60,144 +60,33 @@ tools = module_extension(
 )
 
 # TODO(TheGrizzlyDev): split the code below
-# TODO(TheGrizzlyDev): install cmake, vcpkg, patchelf hermetically
+# TODO(TheGrizzlyDev): install vcpkg, patchelf hermetically
 # TODO(TheGrizzlyDev): add doc
 def _vcpkg_repo_impl(repo_ctx):
-    # manifest_path = repo_ctx.path(repo_ctx.attr.manifest)
-    # repo_ctx.watch(manifest_path)
-    # repo_ctx.symlink(manifest_path, "vcpkg.json")
-    
-    # vcpkg_root_doc = repo_ctx.path(repo_ctx.attr.vcpkg_root)
-    # vcpkg_root_dir = vcpkg_root_doc.dirname # Gets the root directory containing the file .vcpkg-root AKA the actual vcpkg root directory
-
     vcpkg_install_target_name = "install_tree"
 
-    # triplet = repo_ctx.attr.triplet
-    # vcpkg_env = {
-    #     "VCPKG_ROOT": str(vcpkg_root_dir),
-    # }
-    # vcpkg_install = repo_ctx.execute([
-    #         "vcpkg", "install",
-    #         "--x-install-root=vcpkg_installed",
-    #         "--triplet=" + triplet,
-    #         "--dry-run",
-    #     ],
-    #     environment = vcpkg_env
-    # )
-
-    # if vcpkg_install.return_code != 0:
-    #     fail("vcpkg install failed: %s" % vcpkg_install.stderr)
-
-    # print(vcpkg_install.stdout)
-
-    manifest_lock = repo_ctx.read(repo_ctx.attr.manifest_lock, watch="yes")
-    print(manifest_lock)
-
     build_file_content_template = """
-load("@rules_foreign_cc//foreign_cc:vcpkg.bzl", "update_lock_file", "vcpkg_install", "vcpkg_export")
+load("@rules_foreign_cc//foreign_cc:vcpkg.bzl", "vcpkg_install", "vcpkg_export")
 
 vcpkg_install(
     name = "{vcpkg_install_target_name}",
     root = "@{vcpkg_root}//:srcs",
     root_file = "@{vcpkg_root}//:.vcpkg-root",
     manifest = "{manifest}",
-    manifest_lock = "{manifest_lock}",
     triplet = "{triplet}",
 )
     """
+
+    # TODO(TheGrizzlyDev): parse vcpkg.json to list all the packages. For each of them, create a vcpkg_export target
 
     build_file_content = build_file_content_template.format(
         vcpkg_install_target_name=vcpkg_install_target_name,
         vcpkg_root=repo_ctx.attr.vcpkg_root,
         manifest=repo_ctx.attr.manifest,
-        manifest_lock=repo_ctx.attr.manifest_lock,
         triplet=repo_ctx.attr.triplet,
     )
     print(build_file_content)
     repo_ctx.file("BUILD", build_file_content)
-
-
-#     vcpkg_list_installed_packages = repo_ctx.execute([
-#             "vcpkg", "list",
-#             "--x-install-root=vcpkg_installed"
-#         ],
-#         environment = vcpkg_env)
-    
-#     if vcpkg_list_installed_packages.return_code != 0:
-#         fail("Failed to query installed vcpkg packages: %s" % vcpkg_list_installed_packages.stderr)
-
-#     packages = []
-#     for line in vcpkg_list_installed_packages.stdout.splitlines():
-#         parts = line.strip().split(' ', 1)
-#         if len(parts) < 2:
-#             continue  # Skip malformed or empty lines
-#         line = parts[1]
-            
-#         pkg_and_triplet = parts[0].split(":")
-#         pkg_name = pkg_and_triplet[0]
-#         triplet = pkg_and_triplet[1]
-        
-#         version = line.strip().split(' ', 1)[0]
-
-#         packages.append((pkg_name, triplet, version))
-
-#     build_file_content = """
-# load("@rules_cc//cc:defs.bzl", "cc_import")
-#     """
-#     def generate_targets(pkg_name, files, include_prefix):
-#         into_literal_starlark_list = lambda l: "[%s]" % (",".join(["\"%s\"" % (v) for v in l]))
-#         # TODO(TheGrizzlyDev): add support for select based on @bazel_tools//src/conditions:debug that uses debug libraries
-#         # TODO(TheGrizzlyDev): this filtering of debugging libs is very brittle
-#         files_with_extension = lambda *extensions: [f for f in files if f.endswith(extensions) and f.find("debug") < 0]
-#         shared_libraries = files_with_extension(".so", ".dll", ".dylib", ".pyd")
-#         static_archives = files_with_extension(".a", ".pic.a", ".lib")
-#         library_attribute = "system_provided = True"
-#         if len(static_archives) > 0:
-#             library_attribute = "static_library = \"%s\"" % (static_archives[0])
-#         elif len(shared_libraries) > 0:
-#             library_attribute = "shared_library = \"%s\"" % (shared_libraries[0])
-#         return """
-# filegroup(
-#     name = "{pkg_name}_data",
-#     srcs = {files_list},
-#     visibility = ["//visibility:public"],
-# )
-
-# cc_import(
-#     name = "{pkg_name}",
-#     hdrs = {hdrs_list},
-#     data = ["{pkg_name}_data"],
-#     {library_attribute},
-#     visibility = ["//visibility:public"],
-#     strip_include_prefix = "{include_prefix}",
-# )
-#     """.format(
-#         pkg_name=pkg_name,
-#         files_list=into_literal_starlark_list(files),
-#         hdrs_list=into_literal_starlark_list(files_with_extension(".h", ".hpp", ".hxx", ".hh")),
-#         library_attribute=library_attribute,
-#         include_prefix=include_prefix
-#     )
-
-#     for package in packages:
-#         print("Found package: ", package)
-#         pkg_name = package[0]
-#         triplet = package[1]
-#         version = package[2]
-#         pkg_list = repo_ctx.read("vcpkg_installed/vcpkg/info/{pkg_name}_{version}_{triplet}.list".format(
-#             pkg_name=pkg_name,
-#             triplet=triplet,
-#             version=version,
-#         )).splitlines()
-
-#         include_prefix = "vcpkg_installed/%s/include" % (triplet)
-#         files = ["vcpkg_installed/%s" % (file) for file in pkg_list if not file.endswith("/")]
-
-#         build_file_content += generate_targets(pkg_name, files, include_prefix)
-
-#     print(build_file_content)
-#     repo_ctx.file("BUILD", build_file_content)
-
 
 vcpkg_repo = repository_rule(
     implementation = _vcpkg_repo_impl,
@@ -205,7 +94,6 @@ vcpkg_repo = repository_rule(
         "manifest": attr.label(allow_single_file=True), # TODO(TheGrizzlyDev): add doc
         "triplet": attr.string(), # TODO(TheGrizzlyDev): add doc
         "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
-        "manifest_lock": attr.label(allow_single_file=True, mandatory=False), # TODO(TheGrizzlyDev)
     }
 )
 
@@ -221,7 +109,6 @@ vcpkg_root_http_archive = tag_class(attrs = {
 vcpkg_source = tag_class(attrs = {
     "name": attr.string(doc = "The name of the workspace generated"),
     "manifest": attr.label(default = "@__main__//:vcpkg.json", allow_single_file=True), # TODO(TheGrizzlyDev): add doc
-    "manifest_lock": attr.label(default = "@__main__//:vcpkg.bzlmod.lock", allow_single_file=True, mandatory=False), # TODO(TheGrizzlyDev)
     "triplet": attr.string(), # TODO(TheGrizzlyDev): add doc
     "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME) # TODO(TheGrizzlyDev): add doc
 })
@@ -266,17 +153,16 @@ def _vcpkg_mod(module_ctx):
         
     for mod in module_ctx.modules:
         for source in mod.tags.source:
-            target_root_repo = vcpkg_repo_name(source.root)
-            
             vcpkg_repo(
                 name = source.name,
                 manifest = source.manifest,
                 triplet = source.triplet,
-                vcpkg_root = target_root_repo,
-                manifest_lock = source.manifest_lock,
+                vcpkg_root = vcpkg_repo_name(source.root),
             )
     return None
 
+# TODO(TheGrizzlyDev): add support for the configuration file: https://learn.microsoft.com/en-us/vcpkg/reference/vcpkg-configuration-json
+# TODO(TheGrizzlyDev): automatically use the right triplet for a given platform
 vcpkg = module_extension(
     implementation = _vcpkg_mod,
     tag_classes = {

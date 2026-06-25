@@ -446,7 +446,7 @@ def cc_external_rule_impl(ctx, attrs):
     To be used to build external libraries or/and binaries with CMake, configure/make, autotools etc.,
     and use results in Bazel.
     It is possible to use it to build a group of external libraries, that depend on each other or on
-    Bazel library, and pass nessesary tools.
+    Bazel library, and pass necessary tools.
 
     Accepts the actual commands for build configuration/execution in attrs.
 
