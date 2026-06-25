@@ -440,6 +440,161 @@ def _short_path_env_aliases(ctx):
         "export EXT_BUILD_DEPS=\"$RFCC_SHORT_PATH_ROOT_WIN/d\"",
     ]
 
+def foreign_cc_install_action(
+        ctx,
+        *,
+        name,
+        mnemonic,
+        install_root,
+        declared_outputs,
+        inputs,
+        user_script_lines,
+        data_dependencies,
+        tools_env = {},
+        legacy_tools = [],
+        legacy_tools_targets = [],
+        header = None,
+        block_network = None,
+        progress_message = None):
+    """Run a foreign_cc install shell action.
+
+    Sets up the standard rules_foreign_cc sandbox (EXT_BUILD_ROOT, INSTALLDIR,
+    BUILD_TMPDIR, EXT_BUILD_DEPS), stages Bazel-built headers/libs/tools and
+    transitive foreign_cc install dirs under $EXT_BUILD_DEPS, wraps the build
+    script with a cleanup trap and log redirect, and runs it via
+    `ctx.actions.run_shell`.
+
+    The caller controls what runs inside the script via `user_script_lines`,
+    which is spliced in after the sandbox is staged and the script has `cd`'d
+    into `$BUILD_TMPDIR`. Callers are also responsible for declaring all the
+    files/directories the action writes to (`declared_outputs`).
+
+    The calling rule must include `FOREIGN_CC_FRAMEWORK_COMMON_ATTRS` in its
+    attrs so that the helper can read `ctx.attr.env`, `_cc_toolchain`,
+    `_set_file_prefix_map_default`, `_allow_building_in_tmp`,
+    `_foreign_cc_framework_platform`, etc.
+
+    Args:
+        ctx: rule context
+        name: identifier used for action-private file names (e.g.
+            `{name}_foreign_cc/build_script.sh`). Typically the rule's
+            `lib_name` or `ctx.attr.name`.
+        mnemonic: tool name shown in the action mnemonic
+            (`Cc<Mnemonic>MakeRule`) and the `<mnemonic>_logs` output group.
+        install_root: path (relative to the execroot) that `$INSTALLDIR` will
+            be set to. The caller decides the layout and declares the matching
+            outputs.
+        declared_outputs: outputs the action will write to. The log file is
+            added automatically.
+        inputs: `InputFiles` provider (see `_define_inputs`) describing deps
+            to stage under `$EXT_BUILD_DEPS`.
+        user_script_lines: shell lines run after env setup, sandbox staging,
+            and `cd $$BUILD_TMPDIR$$`.
+        data_dependencies: targets whose default_runfiles are added to the
+            action's tools (so `$(execpath)` / `$(location)` work in env vars
+            and scripts).
+        tools_env: extra env vars resolved from `tools_data` entries.
+        legacy_tools: file inputs from deprecated `additional_tools` /
+            `tools_deps` attrs that need to live alongside the action.
+        legacy_tools_targets: targets (not file lists) from deprecated
+            `tools_deps` — used to merge their default_runfiles into the tools
+            list.
+        header: optional banner echoed at the top of the build script. If
+            None, a default `"Bazel external C/C++ Rules. Building '{name}'"`
+            header is used.
+        block_network: whether to add the `block-network` execution
+            requirement. If None (default), the helper adds it unless the
+            rule's `tags` already opt in via `requires-network`.
+        progress_message: optional progress message. Defaults to
+            `"Foreign Cc - {mnemonic}: Building {name}"`.
+
+    Returns:
+        WrappedOutputs with the build script, wrapper script, and log file.
+    """
+    if header == None:
+        header = "Bazel external C/C++ Rules. Building '{}'".format(name)
+
+    env_prelude = get_env_prelude(ctx, install_root, data_dependencies, tools_env)
+
+    script_lines = [
+        "##echo## \"\"",
+        "##echo## \"{}\"".format(header),
+        "##echo## \"\"",
+        "##script_prelude##",
+    ] + env_prelude + [
+        "##path## $$EXT_BUILD_ROOT$$",
+    ] + _short_path_env_aliases(ctx) + [
+        "##rm_rf## $$BUILD_TMPDIR$$",
+        "##rm_rf## $$EXT_BUILD_DEPS$$",
+        "##mkdirs## $$INSTALLDIR$$",
+        "##mkdirs## $$BUILD_TMPDIR$$",
+        "##mkdirs## $$EXT_BUILD_DEPS$$",
+    ] + _print_env() + _copy_deps_and_tools(inputs) + [
+        "cd $$BUILD_TMPDIR$$",
+    ] + user_script_lines
+
+    script_text = "\n".join([
+        shebang(ctx),
+        convert_shell_script(ctx, script_lines),
+        "",
+    ])
+    wrapped_outputs = wrap_outputs(
+        ctx,
+        lib_name = name,
+        configure_name = mnemonic,
+        script_text = script_text,
+        env_prelude = env_prelude,
+    )
+
+    cc_toolchain = find_cpp_toolchain(ctx)
+
+    execution_requirements = {tag: "" for tag in ctx.attr.tags}
+    if block_network == None:
+        block_network = "requires-network" not in execution_requirements
+    if block_network:
+        execution_requirements["block-network"] = ""
+
+    # The use of `run_shell` here is intended to ensure bash is correctly setup on windows
+    # environments. This should not be replaced with `run` until a cross platform implementation
+    # is found that guarantees bash exists or appropriately errors out.
+
+    tool_runfiles = []
+    for data in data_dependencies:
+        tool_runfiles += data[DefaultInfo].default_runfiles.files.to_list()
+
+    for tool in legacy_tools_targets:
+        tool_runfiles += tool[DefaultInfo].default_runfiles.files.to_list()
+
+    resource_set, env = get_resource_env_vars(ctx.attr)
+
+    if progress_message == None:
+        progress_message = "Foreign Cc - {mnemonic}: Building {name}".format(
+            mnemonic = mnemonic,
+            name = name,
+        )
+
+    ctx.actions.run_shell(
+        mnemonic = "Cc" + mnemonic.capitalize() + "MakeRule",
+        inputs = depset(inputs.declared_inputs),
+        outputs = declared_outputs + [wrapped_outputs.log_file],
+        tools =
+            [wrapped_outputs.script_file, wrapped_outputs.wrapper_script_file] +
+            ctx.files.data +
+            ctx.files.build_data +
+            legacy_tools +
+            cc_toolchain.all_files.to_list() +
+            tool_runfiles +
+            [data[DefaultInfo].files_to_run for data in data_dependencies],
+        command = wrapped_outputs.wrapper_script_file.path,
+        execution_requirements = execution_requirements,
+        use_default_shell_env = True,
+        progress_message = progress_message,
+        resource_set = resource_set,
+        env = env,
+    )
+
+    return wrapped_outputs
+
 def cc_external_rule_impl(ctx, attrs):
     """Framework function for performing external C/C++ building.
 
@@ -522,7 +677,6 @@ def cc_external_rule_impl(ctx, attrs):
     data_dependencies += ctx.attr.tools_deps + ctx.attr.additional_tools
 
     installdir = target_root + "/" + lib_name
-    env_prelude = get_env_prelude(ctx, installdir, data_dependencies, tools_env)
 
     if not attrs.postfix_script:
         postfix_script = []
@@ -536,22 +690,9 @@ def cc_external_rule_impl(ctx, attrs):
             outputs.expected_output_paths,
         )
 
-    script_lines = [
-        "##echo## \"\"",
-        "##echo## \"{}\"".format(lib_header),
-        "##echo## \"\"",
-        "##script_prelude##",
-    ] + env_prelude + [
-        "##path## $$EXT_BUILD_ROOT$$",
-    ] + _short_path_env_aliases(ctx) + [
-        "##rm_rf## $$BUILD_TMPDIR$$",
-        "##rm_rf## $$EXT_BUILD_DEPS$$",
-        "##mkdirs## $$INSTALLDIR$$",
-        "##mkdirs## $$BUILD_TMPDIR$$",
-        "##mkdirs## $$EXT_BUILD_DEPS$$",
-    ] + _print_env() + _copy_deps_and_tools(inputs) + [
-        "cd $$BUILD_TMPDIR$$",
-    ] + attrs.create_configure_script(ConfigureParameters(ctx = ctx, attrs = attrs, inputs = inputs)) + postfix_script + validation_script + [
+    user_script_lines = attrs.create_configure_script(
+        ConfigureParameters(ctx = ctx, attrs = attrs, inputs = inputs),
+    ) + postfix_script + validation_script + [
         # replace references to the root directory when building ($BUILD_TMPDIR)
         # and the root where the dependencies were installed ($EXT_BUILD_DEPS)
         # for the results which are in $INSTALLDIR (with placeholder)
@@ -570,63 +711,22 @@ def cc_external_rule_impl(ctx, attrs):
         )
     ]
 
-    script_text = "\n".join([
-        shebang(ctx),
-        convert_shell_script(ctx, script_lines),
-        "",
-    ])
-    wrapped_outputs = wrap_outputs(
-        ctx,
-        lib_name = lib_name,
-        configure_name = attrs.configure_name,
-        script_text = script_text,
-        env_prelude = env_prelude,
-    )
-
-    rule_outputs = outputs.declared_outputs + [installdir_copy.file]
-    cc_toolchain = find_cpp_toolchain(ctx)
-
-    execution_requirements = {tag: "" for tag in ctx.attr.tags}
-    if "requires-network" not in execution_requirements:
-        execution_requirements["block-network"] = ""
-
     # TODO: `additional_tools` is deprecated, remove.
     legacy_tools = ctx.files.additional_tools + ctx.files.tools_deps
 
-    # The use of `run_shell` here is intended to ensure bash is correctly setup on windows
-    # environments. This should not be replaced with `run` until a cross platform implementation
-    # is found that guarantees bash exists or appropriately errors out.
-
-    tool_runfiles = []
-    for data in data_dependencies:
-        tool_runfiles += data[DefaultInfo].default_runfiles.files.to_list()
-
-    for tool in attrs.tools_deps:
-        tool_runfiles += tool[DefaultInfo].default_runfiles.files.to_list()
-
-    resource_set, env = get_resource_env_vars(ctx.attr)
-
-    ctx.actions.run_shell(
-        mnemonic = "Cc" + attrs.configure_name.capitalize() + "MakeRule",
-        inputs = depset(inputs.declared_inputs),
-        outputs = rule_outputs + [wrapped_outputs.log_file],
-        tools =
-            [wrapped_outputs.script_file, wrapped_outputs.wrapper_script_file] +
-            ctx.files.data +
-            ctx.files.build_data +
-            legacy_tools +
-            cc_toolchain.all_files.to_list() +
-            tool_runfiles +
-            [data[DefaultInfo].files_to_run for data in data_dependencies],
-        command = wrapped_outputs.wrapper_script_file.path,
-        execution_requirements = execution_requirements,
-        use_default_shell_env = True,
-        progress_message = "Foreign Cc - {configure_name}: Building {lib_name}".format(
-            configure_name = attrs.configure_name,
-            lib_name = lib_name,
-        ),
-        resource_set = resource_set,
-        env = env,
+    wrapped_outputs = foreign_cc_install_action(
+        ctx,
+        name = lib_name,
+        mnemonic = attrs.configure_name,
+        install_root = installdir,
+        declared_outputs = outputs.declared_outputs + [installdir_copy.file],
+        inputs = inputs,
+        user_script_lines = user_script_lines,
+        data_dependencies = data_dependencies,
+        tools_env = tools_env,
+        legacy_tools = legacy_tools,
+        legacy_tools_targets = attrs.tools_deps,
+        header = lib_header,
     )
 
     # Gather runfiles transitively as per the documentation in:

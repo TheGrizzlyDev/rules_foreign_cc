@@ -23,27 +23,6 @@ vcpkg_export = rule(
 )
 
 def _vcpkg_install_impl(ctx):
-    # cc_toolchain = find_cpp_toolchain(ctx)
-    # autoconf_data = get_autoconf_data(ctx)
-    # automake_data = get_automake_data(ctx)
-    # cmake_data = get_cmake_data(ctx)
-    # m4_data = get_m4_data(ctx)
-    # make_data = get_make_data(ctx)
-    # ninja_data = get_ninja_data(ctx)
-    # meson_data = get_meson_data(ctx)
-    # pkgconfig_data = get_pkgconfig_data(ctx)
-    # msbuild_data = get_msbuild_data(ctx)
-    # print(cc_toolchain)
-    # print(autoconf_data)
-    # print(automake_data)
-    # print(cmake_data)
-    # print(m4_data)
-    # print(make_data)
-    # print(ninja_data)
-    # print(meson_data)
-    # print(pkgconfig_data)
-    # print(msbuild_data)
-    # use cc_external_rule_impl to build with a PATH that sets up the hermetic version of these toolchains
     install_tree = ctx.actions.declare_directory("%s_install_tree" % ctx.attr.name)
     vcpkg_root_and_config = depset([ctx.file.manifest], transitive=[ctx.attr.root[DefaultInfo].files])
     
