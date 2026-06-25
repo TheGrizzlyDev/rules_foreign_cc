@@ -166,6 +166,65 @@ def target_os_name(ctx):
 
     return "unknown"
 
+VcpkgTripletInfo = provider(
+    doc = "vcpkg triplet for the active Bazel target platform",
+    fields = {"triplet": "(str) e.g. arm64-osx, x64-linux, x64-windows"},
+)
+
+# vcpkg uses `{arch}-{os}` with a simplified vocabulary. Bazel constraints
+# map onto these values; combinations not represented here resolve to "" and
+# the consuming rule fails with a clear error.
+_VCPKG_ARCH = {
+    "@platforms//cpu:x86_64": "x64",
+    "@platforms//cpu:aarch64": "arm64",
+    "@platforms//cpu:x86_32": "x86",
+    "@platforms//cpu:armv7": "arm",
+}
+
+_VCPKG_OS = {
+    "@platforms//os:linux": "linux",
+    "@platforms//os:macos": "osx",
+    "@platforms//os:windows": "windows",
+}
+
+def _vcpkg_triplet_info_impl(ctx):
+    if not ctx.attr.arch or not ctx.attr.os:
+        return [VcpkgTripletInfo(triplet = "")]
+    return [VcpkgTripletInfo(triplet = "{}-{}".format(ctx.attr.arch, ctx.attr.os))]
+
+_vcpkg_triplet_info = rule(
+    doc = "Resolves the vcpkg triplet for the active target platform.",
+    implementation = _vcpkg_triplet_info_impl,
+    attrs = {
+        "arch": attr.string(doc = "vcpkg architecture name"),
+        "os": attr.string(doc = "vcpkg OS name"),
+    },
+    provides = [VcpkgTripletInfo],
+)
+
+def vcpkg_triplet_info(name = "vcpkg_triplet_info"):
+    """Defines a target whose VcpkgTripletInfo is derived from select() over
+    @platforms//{cpu,os}:*.
+
+    Users with non-default triplets (e.g. x64-linux-static) can instantiate
+    their own _vcpkg_triplet_info-shaped target with a literal triplet string
+    and point vcpkg_install/vcpkg_export's `triplet` attr at it.
+
+    Args:
+      name: A unique name for this target.
+    """
+    arch_select = {k: v for k, v in _VCPKG_ARCH.items()}
+    arch_select["//conditions:default"] = ""
+    os_select = {k: v for k, v in _VCPKG_OS.items()}
+    os_select["//conditions:default"] = ""
+
+    _vcpkg_triplet_info(
+        name = name,
+        arch = select(arch_select),
+        os = select(os_select),
+        visibility = ["//visibility:public"],
+    )
+
 def triplet_name(os, arch):
     """A helper function for getting the platform triplet from the results of the above arch/os functions
 

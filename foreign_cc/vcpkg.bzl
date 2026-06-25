@@ -8,6 +8,34 @@ load(
     "InputFiles",
     "foreign_cc_install_action",
 )
+load(
+    "//foreign_cc/private/framework:platform.bzl",
+    "VcpkgTripletInfo",
+)
+
+_DEFAULT_TRIPLET = Label("//foreign_cc/private/framework:vcpkg_triplet_info")
+
+def _resolve_triplet(ctx):
+    triplet = ctx.attr.triplet[VcpkgTripletInfo].triplet
+    if not triplet:
+        fail(
+            "vcpkg: no triplet mapping for the active platform. " +
+            "Override `triplet = ...` with a target providing VcpkgTripletInfo " +
+            "(see foreign_cc/private/framework/platform.bzl).",
+        )
+    return triplet
+
+def _resolve_per_triplet(d, triplet):
+    """Look up a per-triplet entry from an attr.string_list_dict.
+
+    Exact-match key wins; the empty key "" is the fallback applied when no
+    triplet-specific entry exists. Returns [] if neither is present.
+    """
+    if triplet in d:
+        return d[triplet]
+    if "" in d:
+        return d[""]
+    return []
 
 _VCPKG_EXPORT_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
@@ -82,6 +110,8 @@ def _vcpkg_export_impl(ctx):
         fail("vcpkg_export: expected exactly one install_tree directory, got {}".format(len(install_tree_files)))
     install_tree = install_tree_files[0]
 
+    triplet = _resolve_triplet(ctx)
+
     export_dir = ctx.actions.declare_directory(ctx.attr.name + "_export")
 
     # Relative path from export_dir's parent to install_tree. Resolves at action
@@ -102,18 +132,19 @@ def _vcpkg_export_impl(ctx):
         arguments = [
             install_tree.path,
             export_dir.path,
-            ctx.attr.triplet,
+            triplet,
             ctx.attr.package,
             base_rel,
         ],
         inputs = [install_tree],
         outputs = [export_dir],
-        progress_message = "vcpkg_export: linking {} ({})".format(ctx.attr.package, ctx.attr.triplet),
+        progress_message = "vcpkg_export: linking {} ({})".format(ctx.attr.package, triplet),
     )
 
     # Resolution order for link flags:
     #   1. out_headers_only=True -> no -l flags at all.
-    #   2. Any of out_static_libs/out_shared_libs/out_interface_libs set -> use them.
+    #   2. Any of out_static_libs/out_shared_libs/out_interface_libs set for
+    #      the active triplet (or under the "" fallback key) -> use them.
     #   3. Fallback: guess [package] as the single -l<package> name.
     # TODO(TheGrizzlyDev): when an override is absent, derive the names from
     # the package `.list` file via map_directory; the [package] heuristic in
@@ -123,7 +154,11 @@ def _vcpkg_export_impl(ctx):
     if ctx.attr.out_headers_only:
         link_flags = []
     else:
-        explicit_libs = ctx.attr.out_static_libs + ctx.attr.out_shared_libs + ctx.attr.out_interface_libs
+        explicit_libs = (
+            _resolve_per_triplet(ctx.attr.out_static_libs, triplet) +
+            _resolve_per_triplet(ctx.attr.out_shared_libs, triplet) +
+            _resolve_per_triplet(ctx.attr.out_interface_libs, triplet)
+        )
         library_names = explicit_libs if explicit_libs else [ctx.attr.package]
         link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
 
@@ -169,33 +204,40 @@ vcpkg_export = rule(
             doc = "A vcpkg_install target whose install tree contains this package.",
             mandatory = True,
         ),
-        "out_binaries": attr.string_list(
-            doc = "Names of installed binaries (forward-compat; not yet used for CcInfo).",
-            default = [],
+        "out_binaries": attr.string_list_dict(
+            doc = "Per-triplet binary basenames (forward-compat; not yet used for CcInfo). Key \"\" applies to all triplets.",
+            default = {},
         ),
         "out_headers_only": attr.bool(
             doc = "If True, no -l flags are emitted (header-only package).",
             default = False,
         ),
-        "out_interface_libs": attr.string_list(
-            doc = "Interface library basenames to link (passed as `-l<name>`).",
-            default = [],
+        "out_interface_libs": attr.string_list_dict(
+            doc = "Per-triplet interface library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
+            default = {},
         ),
-        "out_shared_libs": attr.string_list(
-            doc = "Shared library basenames to link (passed as `-l<name>`).",
-            default = [],
+        "out_shared_libs": attr.string_list_dict(
+            doc = "Per-triplet shared library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
+            default = {},
         ),
-        "out_static_libs": attr.string_list(
-            doc = "Static library basenames to link (passed as `-l<name>`).",
-            default = [],
+        "out_static_libs": attr.string_list_dict(
+            doc = "Per-triplet static library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
+            default = {},
         ),
         "package": attr.string(
             doc = "vcpkg package name to export from the install tree.",
             mandatory = True,
         ),
-        "triplet": attr.string(
-            doc = "vcpkg triplet (must match the triplet used to populate install_tree).",
-            mandatory = True,
+        "triplet": attr.label(
+            doc = (
+                "Target providing the vcpkg triplet via VcpkgTripletInfo. " +
+                "Defaults to a built-in target that derives the triplet from " +
+                "the active Bazel platform via select(). Override with your own " +
+                "VcpkgTripletInfo-providing target for non-default triplets " +
+                "(e.g. x64-linux-static)."
+            ),
+            default = _DEFAULT_TRIPLET,
+            providers = [VcpkgTripletInfo],
         ),
     },
     provides = [CcInfo],
@@ -222,13 +264,15 @@ def _vcpkg_install_impl(ctx):
         declared_inputs = declared_inputs,
     )
 
+    triplet = _resolve_triplet(ctx)
+
     user_script_lines = [
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
         "  --x-install-root=\"$$INSTALLDIR$$\" \\",
-        "  --triplet={}".format(ctx.attr.triplet),
+        "  --triplet={}".format(triplet),
     ]
 
     foreign_cc_install_action(
@@ -269,7 +313,15 @@ _VCPKG_INSTALL_ATTRS.update({
     "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
     "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
     "root_file": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
-    "triplet": attr.string(),  # TODO(TheGrizzlyDev): add doc
+    "triplet": attr.label(
+        doc = (
+            "Target providing the vcpkg triplet via VcpkgTripletInfo. " +
+            "Defaults to a built-in target that derives the triplet from " +
+            "the active Bazel platform via select()."
+        ),
+        default = _DEFAULT_TRIPLET,
+        providers = [VcpkgTripletInfo],
+    ),
 })
 
 vcpkg_install = rule(
