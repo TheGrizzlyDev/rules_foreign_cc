@@ -225,8 +225,8 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "i0PgbG98qZNj3sGrntwaK+C/DtKsPMjhavl+8aCGqrM=",
-        "usagesDigest": "lhSTwxXmWasmbtVTDcVG3UFYMLOXtt48AG867EkQbhE=",
+        "bzlTransitiveDigest": "6mCxJQZVm++eq/R3kgzOlm7RV97bRPmz5KEXLfBEm7c=",
+        "usagesDigest": "EUlMvMVv7/1vho0PPaHIEdN0YlpmSDEhu7JV3a/dQKQ=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -239,7 +239,7 @@
               ],
               "strip_prefix": "vcpkg-2026.06.01",
               "sha256": "d394626f9205790915c70e1281eb08554e8d72ac0677334893e32636ae08ec3d",
-              "build_file_content": "exports_files(glob(['**']))"
+              "build_file_content": "exports_files([\".vcpkg-root\"])\n\nfilegroup(\n    name = \"srcs\", \n    srcs=glob([\"**/*\"]),\n    visibility = [\"//visibility:public\"],\n)"
             }
           },
           "vcpkg_deps": {
@@ -247,7 +247,8 @@
             "attributes": {
               "manifest": "@@//vcpkg:vcpkg.json",
               "triplet": "arm64-osx",
-              "vcpkg_root": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root": "vcpkg_root_default_vcpkg_root",
+              "manifest_lock": "@@//vcpkg:vcpkg.bzlmod.lock"
             }
           }
         },
