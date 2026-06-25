@@ -75,7 +75,13 @@ def _vcpkg_repo_impl(repo_ctx):
             packages.append(dep["name"])
 
     lines = [
+        "load(\"@bazel_skylib//rules/directory:directory.bzl\", \"directory\")",
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
+        "",
+        "directory(",
+        "    name = \"{}_home\",".format(vcpkg_install_target_name),
+        "    srcs = [],",
+        ")",
         "",
         "vcpkg_install(",
         "    name = \"{}\",".format(vcpkg_install_target_name),
@@ -83,6 +89,7 @@ def _vcpkg_repo_impl(repo_ctx):
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
         "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
         "    triplet = \"{}\",".format(repo_ctx.attr.triplet),
+        "    home = \":{}_home\",".format(vcpkg_install_target_name),
         ")",
         "",
     ]

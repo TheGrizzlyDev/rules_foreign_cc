@@ -1,4 +1,5 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
 load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
 load(
     "//foreign_cc/private:framework.bzl",
@@ -167,17 +168,12 @@ vcpkg_export = rule(
 def _vcpkg_install_impl(ctx):
     install_tree = ctx.actions.declare_directory("%s_install_tree" % ctx.attr.name)
 
-    home_dir = ctx.actions.declare_directory("%s_home" % ctx.attr.name)
-    ctx.actions.run_shell(
-        outputs = [home_dir],
-        command = "mkdir -p \"$1\"",
-        arguments = [home_dir.path],
-        mnemonic = "VcpkgInstallHome",
-        progress_message = "vcpkg_install: creating empty HOME for {}".format(ctx.attr.name),
-    )
+    home_info = ctx.attr.home[DirectoryInfo]
+    home_path = home_info.path
+    home_inputs = home_info.transitive_files.to_list()
 
     root_files = ctx.attr.root[DefaultInfo].files.to_list()
-    declared_inputs = [ctx.file.manifest, home_dir] + root_files
+    declared_inputs = [ctx.file.manifest] + home_inputs + root_files
 
     inputs = InputFiles(
         headers = [],
@@ -191,7 +187,7 @@ def _vcpkg_install_impl(ctx):
     )
 
     user_script_lines = [
-        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_dir.path),
+        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
@@ -228,6 +224,11 @@ _VCPKG_INSTALL_ATTRS.update({
         allow_files = True,
         cfg = "target",
         default = [],
+    ),
+    "home": attr.label(
+        doc = "A `bazel_skylib` `directory` target used as $HOME for the vcpkg invocation.",
+        mandatory = True,
+        providers = [DirectoryInfo],
     ),
     "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
     "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
