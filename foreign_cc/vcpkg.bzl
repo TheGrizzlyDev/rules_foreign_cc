@@ -43,7 +43,9 @@ def _resolve_override(override_json, triplet, compilation_mode):
     by entry order (earlier wins) so the JSON's order is meaningful.
 
     Returns a dict containing only the _OVERRIDE_PAYLOAD_FIELDS keys present
-    in the picked entry; if no entry matches, returns {}.
+    in the picked entry, plus a `_mode_scoped` bool recording whether the
+    picked entry had its `compilation_mode` field set. If no entry matches,
+    returns {}.
     """
     if not override_json:
         return {}
@@ -66,7 +68,9 @@ def _resolve_override(override_json, triplet, compilation_mode):
 
     if best == None:
         return {}
-    return {k: best[k] for k in _OVERRIDE_PAYLOAD_FIELDS if k in best}
+    result = {k: best[k] for k in _OVERRIDE_PAYLOAD_FIELDS if k in best}
+    result["_mode_scoped"] = best.get("compilation_mode") != None
+    return result
 
 _VCPKG_EXPORT_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
@@ -218,6 +222,14 @@ def _vcpkg_export_impl(ctx):
             override.get("out_interface_libs", [])
         )
         library_names = explicit_libs if explicit_libs else [ctx.attr.package]
+        # Heuristic: vcpkg ports conventionally suffix debug libraries with
+        # `d` (e.g. `libfmtd.a`, `libbz2d.a`). In debug mode, apply that
+        # suffix to lib names that came from the fallback or from a
+        # mode-agnostic override entry. Mode-scoped entries
+        # (`compilation_mode = "dbg"`) are taken verbatim — they're the
+        # explicit override for packages that don't follow the convention.
+        if debug and not override.get("_mode_scoped"):
+            library_names = [n + "d" for n in library_names]
         link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
 
     compilation_context = cc_common.create_compilation_context(

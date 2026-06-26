@@ -170,18 +170,13 @@ vcpkg.package_override(
     out_static_libs = ["bz2"],
 )
 
+# jsoncpp installs libjsoncpp.a in both release and debug — opt out of the
+# default "+d" debug suffix.
 vcpkg.package_override(
     source = "vcpkg_deps",
-    package = "bzip2",
+    package = "jsoncpp",
     compilation_mode = "dbg",
-    out_static_libs = ["bz2d"],
-)
-
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "fmt",
-    compilation_mode = "dbg",
-    out_static_libs = ["fmtd"],
+    out_static_libs = ["jsoncpp"],
 )
 
 use_repo(vcpkg, "vcpkg_deps")

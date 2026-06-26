@@ -226,7 +226,7 @@
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
         "bzlTransitiveDigest": "A530y0aK9LUbxkc+SI//rH+c7Du1FedJUVcN9K7SVtI=",
-        "usagesDigest": "0wLsyS2Accgld+FZhXqFgpeIP13shyGGMYoNepmYbFU=",
+        "usagesDigest": "HSYK0IVswmbEQFRE2L9zLa64ShCObGj/oxiDkd9vgoA=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -247,7 +247,7 @@
             "attributes": {
               "manifest": "@@//:vcpkg.json",
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
-              "overrides_json": "{\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]},{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"bz2d\"]}]},\"fmt\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"fmtd\"]}]}}",
+              "overrides_json": "{\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"jsoncpp\"]}]}}",
               "triplet_mappings_json": "[{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:linux\"],\"triplet\":\"x64-linux\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:linux\"],\"triplet\":\"arm64-linux\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:macos\"],\"triplet\":\"x64-osx\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:macos\"],\"triplet\":\"arm64-osx\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:windows\"],\"triplet\":\"x64-windows\"},{\"constraints\":[\"@@platforms//cpu:x86_32\",\"@@platforms//os:windows\"],\"triplet\":\"x86-windows\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:windows\"],\"triplet\":\"arm64-windows\"}]"
             }
           }
