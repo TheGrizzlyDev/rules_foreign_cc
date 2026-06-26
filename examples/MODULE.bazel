@@ -168,15 +168,22 @@ vcpkg.package_override(
     source = "vcpkg_deps",
     package = "bzip2",
     out_static_libs = ["bz2"],
+    # Exercises the placeholder substitution end-to-end: the macro name uses
+    # _UPPER, the value uses the bare form. //vcpkg_package_override:main
+    # reads these at compile time.
+    defines = [
+        "VCPKG_$$VCPKG_PACKAGE_UPPER$$_NAME=\"$$VCPKG_PACKAGE$$\"",
+        "VCPKG_$$VCPKG_PACKAGE_UPPER$$_TRIPLET=\"$$VCPKG_TRIPLET$$\"",
+    ],
 )
 
 # jsoncpp installs libjsoncpp.a in both release and debug — opt out of the
-# default "+d" debug suffix.
+# default "+d" debug suffix. Exercises the $$VCPKG_PACKAGE$$ placeholder.
 vcpkg.package_override(
     source = "vcpkg_deps",
     package = "jsoncpp",
     compilation_mode = "dbg",
-    out_static_libs = ["jsoncpp"],
+    out_static_libs = ["$$VCPKG_PACKAGE$$"],
 )
 
 # libpng's static lib is libpng16.a (not libpng.a) and its only link-time

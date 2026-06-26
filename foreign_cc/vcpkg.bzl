@@ -43,9 +43,53 @@ _OVERRIDE_PAYLOAD_FIELDS = (
     "out_interface_libs",
     "out_binaries",
     "out_headers_only",
+    "defines",
 )
 
-def _resolve_override(override_json, triplet, compilation_mode):
+_OVERRIDE_LIST_FIELDS = (
+    "out_static_libs",
+    "out_shared_libs",
+    "out_interface_libs",
+    "out_binaries",
+    "defines",
+)
+
+def _expand_placeholders(s, triplet, package, field):
+    """Substitute $$VCPKG_TRIPLET$$ / $$VCPKG_PACKAGE$$ (plus _UPPER/_LOWER
+    variants) inside `s`. Any unknown $$VCPKG_*$$ placeholder is a hard
+    error.
+
+    `field` names the attribute or override field carrying `s`; it's only
+    used to make the error message actionable.
+    """
+    subs = {
+        "$$VCPKG_TRIPLET$$": triplet,
+        "$$VCPKG_TRIPLET_UPPER$$": triplet.upper(),
+        "$$VCPKG_TRIPLET_LOWER$$": triplet.lower(),
+        "$$VCPKG_PACKAGE$$": package,
+        "$$VCPKG_PACKAGE_UPPER$$": package.upper(),
+        "$$VCPKG_PACKAGE_LOWER$$": package.lower(),
+    }
+    result = s
+    for placeholder, value in subs.items():
+        result = result.replace(placeholder, value)
+
+    if "$$VCPKG_" in result:
+        # Find the offending fragment for the error message.
+        start = result.index("$$VCPKG_")
+        end_marker = result.find("$$", start + 2)
+        offending = result[start:end_marker + 2] if end_marker != -1 else result[start:]
+        fail(
+            "vcpkg: unknown placeholder {} in {} value \"{}\". Known placeholders: {}.".format(
+                offending,
+                field,
+                s,
+                ", ".join(sorted(subs.keys())),
+            ),
+        )
+    return result
+
+def _resolve_override(override_json, triplet, compilation_mode, package):
     """Pick the most-specific override entry for (triplet, compilation_mode).
 
     An entry's optional `triplet` / `compilation_mode` fields scope its
@@ -80,7 +124,14 @@ def _resolve_override(override_json, triplet, compilation_mode):
 
     if best == None:
         return {}
-    result = {k: best[k] for k in _OVERRIDE_PAYLOAD_FIELDS if k in best}
+    result = {}
+    for k in _OVERRIDE_PAYLOAD_FIELDS:
+        if k not in best:
+            continue
+        v = best[k]
+        if k in _OVERRIDE_LIST_FIELDS:
+            v = [_expand_placeholders(item, triplet, package, k) for item in v]
+        result[k] = v
     result["_mode_scoped"] = best.get("compilation_mode") != None
     return result
 
@@ -213,7 +264,7 @@ def _vcpkg_export_impl(ctx):
     compilation_mode = ctx.attr.compilation_mode or ctx.var["COMPILATION_MODE"]
     debug = compilation_mode == "dbg"
 
-    override = _resolve_override(ctx.attr.override_json, triplet, compilation_mode)
+    override = _resolve_override(ctx.attr.override_json, triplet, compilation_mode, ctx.attr.package)
 
     ctx.actions.run(
         mnemonic = "VcpkgExport",
@@ -261,10 +312,16 @@ def _vcpkg_export_impl(ctx):
             library_names = [n + "d" for n in library_names]
         link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
 
+    # `defines` come from two sources: the rule attr (substituted here) and
+    # the matched override entry (already substituted inside _resolve_override).
+    expanded_defines = [
+        _expand_placeholders(d, triplet, ctx.attr.package, "defines")
+        for d in ctx.attr.defines
+    ] + override.get("defines", [])
     compilation_context = cc_common.create_compilation_context(
         headers = depset([export_dir]),
         system_includes = depset([export_dir.path + "/include"]),
-        defines = depset(ctx.attr.defines),
+        defines = depset(expanded_defines),
     )
 
     linking_context = cc_common.create_linking_context(
@@ -343,7 +400,12 @@ vcpkg_export = rule(
                 "\"out_interface_libs\"?: [str], \"out_binaries\"?: [str], " +
                 "\"out_headers_only\"?: bool}, ...]}`. " +
                 "Entries are scoped by their optional `triplet` and " +
-                "`compilation_mode` fields; the most-specific match wins."
+                "`compilation_mode` fields; the most-specific match wins. " +
+                "String values in the `out_*` lists and on the rule's " +
+                "`defines` attr may use the placeholders " +
+                "`$$VCPKG_TRIPLET$$`, `$$VCPKG_PACKAGE$$` (also the " +
+                "`_UPPER` / `_LOWER` casing variants). Unknown placeholders " +
+                "are a hard error."
             ),
             default = "",
         ),

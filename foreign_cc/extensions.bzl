@@ -172,12 +172,15 @@ _vcpkg_capture_repo = repository_rule(
 
 def _render_override_kwarg(override_doc):
     # Render an override doc ({"entries": [...]}) as the lines for an
-    # `override_json = """..."""` kwarg in a vcpkg_export(...) call.
+    # `override_json = r"""..."""` kwarg in a vcpkg_export(...) call.
+    # The string is *raw* so the JSON's own `\"` escapes survive into the
+    # generated BUILD literal (otherwise Starlark would unescape them and
+    # the json.decode in the rule impl would choke on stray quotes).
     # Returns None when there are no entries (so the caller omits the kwarg).
     if not override_doc.get("entries"):
         return None
     pretty = json.encode_indent(override_doc, indent = "  ")
-    return ["    override_json = \"\"\""] + pretty.splitlines() + ["\"\"\","]
+    return ["    override_json = r\"\"\""] + pretty.splitlines() + ["\"\"\","]
 
 def _list_triplets(repo_ctx, vcpkg_root_path):
     """Enumerate triplet names from <vcpkg_root>/triplets and .../community."""
@@ -520,18 +523,21 @@ vcpkg_triplet_mapping = tag_class(attrs = {
 # common packages work out of the box. User-declared overrides shadow the
 # defaults on the matching (package, triplet, compilation_mode) cell, same
 # rule as triplet_mapping.
-# TODO(TheGrizzlyDev): support `{triplet}`, `{package}`, `{version}`
-# placeholders inside override string values so a single universal override
-# (e.g. `out_static_libs = ["{package}d"]` for compilation_mode = "dbg")
-# covers patterns like vcpkg's debug-suffix convention without enumerating
-# per package.
+# TODO(TheGrizzlyDev): add `$$VCPKG_VERSION$$` once the resolved (not
+# constraint) version is reachable; today version is only known after
+# `vcpkg install` runs.
 vcpkg_package_override = tag_class(attrs = {
     "source": attr.string(
         doc = "The name of the vcpkg.source repo these overrides apply to.",
         mandatory = True,
     ),
     "package": attr.string(
-        doc = "vcpkg package name to override.",
+        doc = (
+            "vcpkg package name to override. String values inside the " +
+            "`out_*` list attrs may reference `$$VCPKG_TRIPLET$$` and " +
+            "`$$VCPKG_PACKAGE$$` (plus their `_UPPER` / `_LOWER` casing " +
+            "variants) which are substituted at analysis time."
+        ),
         mandatory = True,
     ),
     "triplet": attr.string(
@@ -553,6 +559,7 @@ vcpkg_package_override = tag_class(attrs = {
     "out_interface_libs": attr.string_list(default = []),
     "out_binaries": attr.string_list(default = []),
     "out_headers_only": attr.bool(default = False),
+    "defines": attr.string_list(default = []),
 })
 
 VCPKG_ROOT_BUILD_FILE = """
@@ -601,7 +608,7 @@ def _vcpkg_mod(module_ctx):
     # Each `package_override` tag becomes one entry; the entry's optional
     # `triplet` and `compilation_mode` fields scope it. The vcpkg_export rule
     # picks the most-specific matching entry at analysis time.
-    _OV_LIST_FIELDS = ("out_static_libs", "out_shared_libs", "out_interface_libs", "out_binaries")
+    _OV_LIST_FIELDS = ("out_static_libs", "out_shared_libs", "out_interface_libs", "out_binaries", "defines")
     overrides_by_source = {}
     for mod in module_ctx.modules:
         for ov in mod.tags.package_override:
