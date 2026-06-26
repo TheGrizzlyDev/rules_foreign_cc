@@ -4,6 +4,7 @@ load("@bazel_features//:features.bzl", "bazel_features")
 load("//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 load("//toolchains:prebuilt_toolchains.bzl", "prebuilt_toolchains")
 load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("//foreign_cc:vcpkg_overrides.bzl", "DEFAULT_PACKAGE_OVERRIDES")
 
 _DEFAULT_CMAKE_VERSION = "3.31.12"
 _DEFAULT_NINJA_VERSION = "1.13.2"
@@ -518,14 +519,24 @@ vcpkg_triplet_mapping = tag_class(attrs = {
     ),
 })
 
-# TODO(TheGrizzlyDev): ship a built-in default registry of well-known
-# package_overrides (boost-*, openssl, qt, abseil, protobuf, grpc, ...) so
-# common packages work out of the box. User-declared overrides shadow the
-# defaults on the matching (package, triplet, compilation_mode) cell, same
-# rule as triplet_mapping.
-# TODO(TheGrizzlyDev): add `$$VCPKG_VERSION$$` once the resolved (not
-# constraint) version is reachable; today version is only known after
-# `vcpkg install` runs.
+def _user_entry_covers_default(user_entry, default_entry):
+    # Drop a default whenever a user entry matches at least the same
+    # configurations: universal user (no triplet / no compilation_mode)
+    # covers any default; a scoped user covers only same-scoped defaults.
+    for field in ("triplet", "compilation_mode"):
+        user_v = user_entry.get(field)
+        if user_v != None and user_v != default_entry.get(field):
+            return False
+    return True
+
+def _merged_overrides_for_package(user_entries, default_entries):
+    kept_defaults = [
+        d
+        for d in default_entries
+        if not any([_user_entry_covers_default(u, d) for u in user_entries])
+    ]
+    return user_entries + kept_defaults
+
 vcpkg_package_override = tag_class(attrs = {
     "source": attr.string(
         doc = "The name of the vcpkg.source repo these overrides apply to.",
@@ -664,12 +675,25 @@ def _vcpkg_mod(module_ctx):
     triplet_mappings = user_mappings + default_mappings
     target_triplets = sorted({tm["triplet"]: True for tm in triplet_mappings}.keys())
 
+    # Bucket built-in default overrides by package so we can merge per
+    # source. Each entry copies its dict and strips the `package` key to
+    # match the in-memory shape of user entries.
+    defaults_by_package = {}
+    for d in DEFAULT_PACKAGE_OVERRIDES:
+        entry = {k: v for k, v in d.items() if k != "package"}
+        defaults_by_package.setdefault(d["package"], []).append(entry)
+
     for mod in module_ctx.modules:
         for source in mod.tags.source:
             by_pkg = overrides_by_source.get(source.name, {})
             applicable = {}
-            for pkg in sorted(by_pkg.keys()):
-                applicable[pkg] = {"entries": by_pkg[pkg]}
+            packages = sorted({p: True for p in (list(by_pkg.keys()) + list(defaults_by_package.keys()))}.keys())
+            for pkg in packages:
+                user_entries = by_pkg.get(pkg, [])
+                default_entries = defaults_by_package.get(pkg, [])
+                merged = _merged_overrides_for_package(user_entries, default_entries)
+                if merged:
+                    applicable[pkg] = {"entries": merged}
 
             # Declare one capture repo per (source, triplet). Each runs vcpkg
             # to enumerate the assets for its triplet and downloads them via

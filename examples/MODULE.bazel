@@ -164,55 +164,19 @@ vcpkg.source(
     manifest = "//:vcpkg.json",
 )
 
+# `out_static_libs = ["bz2"]` here is redundant with the built-in default
+# (see //foreign_cc:vcpkg_overrides.bzl) — kept as an example of how a user
+# override looks. It also carries `defines` with placeholder substitution,
+# which the built-in default doesn't, so this entry shadows the default
+# while extending it.
 vcpkg.package_override(
     source = "vcpkg_deps",
     package = "bzip2",
     out_static_libs = ["bz2"],
-    # Exercises the placeholder substitution end-to-end: the macro name uses
-    # _UPPER, the value uses the bare form. //vcpkg_package_override:main
-    # reads these at compile time.
     defines = [
         "VCPKG_$$VCPKG_PACKAGE_UPPER$$_NAME=\"$$VCPKG_PACKAGE$$\"",
         "VCPKG_$$VCPKG_PACKAGE_UPPER$$_TRIPLET=\"$$VCPKG_TRIPLET$$\"",
     ],
-)
-
-# jsoncpp installs libjsoncpp.a in both release and debug — opt out of the
-# default "+d" debug suffix. Exercises the $$VCPKG_PACKAGE$$ placeholder.
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "jsoncpp",
-    compilation_mode = "dbg",
-    out_static_libs = ["$$VCPKG_PACKAGE$$"],
-)
-
-# libpng's static lib is libpng16.a (not libpng.a) and its only link-time
-# dep is zlib (depend-info wires that automatically).
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "libpng",
-    out_static_libs = ["png16"],
-)
-
-# vcpkg installs zlib as libz.a, not libzlib.a.
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "zlib",
-    out_static_libs = ["z"],
-)
-
-# vcpkg-cmake* are build-system bookkeeping ports with no link artifacts;
-# mark them headers-only so the dependency edges from libpng -> zlib (which
-# also pull these in via depend-info) don't try to link non-existent libs.
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "vcpkg-cmake",
-    out_headers_only = True,
-)
-vcpkg.package_override(
-    source = "vcpkg_deps",
-    package = "vcpkg-cmake-config",
-    out_headers_only = True,
 )
 
 use_repo(vcpkg, "vcpkg_deps")
