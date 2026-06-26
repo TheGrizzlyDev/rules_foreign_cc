@@ -59,9 +59,113 @@ tools = module_extension(
     },
 )
 
-# TODO(TheGrizzlyDev): split the code below
-# TODO(TheGrizzlyDev): install vcpkg, patchelf hermetically
-# TODO(TheGrizzlyDev): add doc
+# Capture script invoked by vcpkg's x-script asset source. vcpkg passes
+# {sha512} {url} {dst} positional args. We append `<sha512>\t<integrity>\t<url>`
+# (integrity = SRI-style base64-encoded sha512) to $VCPKG_BAZEL_CAPTURE_LOG
+# and exit 1 so vcpkg skips the asset. With --keep-going, vcpkg enumerates
+# every other asset despite each script call failing.
+_ASSET_CAPTURE_SCRIPT = """#!/bin/bash
+set -u
+sha_hex="$1"
+url="$2"
+b64="$(printf '%s' "$sha_hex" | xxd -r -p | base64)"
+printf '%s\t%s\t%s\n' "$sha_hex" "sha512-$b64" "$url" >> "$VCPKG_BAZEL_CAPTURE_LOG"
+exit 1
+"""
+
+def _vcpkg_capture_repo_impl(repo_ctx):
+    vcpkg_root_path = repo_ctx.path(repo_ctx.attr.vcpkg_root_marker).dirname
+    vcpkg_exe_basename = "vcpkg.exe" if repo_ctx.os.name.lower().startswith("windows") else "vcpkg"
+    vcpkg_exe = vcpkg_root_path.get_child(vcpkg_exe_basename)
+    if not vcpkg_exe.exists:
+        host_vcpkg = repo_ctx.which(vcpkg_exe_basename)
+        if host_vcpkg == None:
+            fail("vcpkg: CLI not found in vcpkg root ({}) and not on PATH.".format(vcpkg_exe))
+        vcpkg_exe = host_vcpkg
+
+    capture_script = repo_ctx.path("_capture.sh")
+    repo_ctx.file(capture_script, _ASSET_CAPTURE_SCRIPT, executable = True)
+
+    manifest_dir = repo_ctx.path(repo_ctx.attr.manifest).dirname
+    triplet = repo_ctx.attr.triplet
+    log_file = repo_ctx.path("_capture.log")
+    scratch = repo_ctx.path("_scratch")
+
+    result = repo_ctx.execute(
+        [
+            str(vcpkg_exe),
+            "install",
+            "--only-downloads",
+            "--keep-going",
+            "--x-manifest-root={}".format(manifest_dir),
+            "--triplet={}".format(triplet),
+            "--x-install-root={}/installed".format(scratch),
+            "--x-buildtrees-root={}/buildtrees".format(scratch),
+            "--x-packages-root={}/packages".format(scratch),
+            "--downloads-root={}/downloads".format(scratch),
+            "--x-asset-sources=x-block-origin;x-script,{} {{sha512}} {{url}} {{dst}}".format(capture_script),
+        ],
+        environment = {
+            "VCPKG_ROOT": str(vcpkg_root_path),
+            "VCPKG_BAZEL_CAPTURE_LOG": str(log_file),
+        },
+    )
+    # An empty/missing log means vcpkg failed before any port's asset was
+    # tried (e.g. cross-compile triplet unreachable from this host). That's
+    # not necessarily an error — the user may never build for this triplet —
+    # so produce an empty filegroup and let the install action fail later
+    # with a clearer error if the missing assets are actually needed.
+    seen = {}
+    downloads = []  # list of sha512_hex, also the relative filename under downloads/
+    if not log_file.exists:
+        repo_ctx.file("BUILD.bazel", "filegroup(name = \"all\", srcs = [], visibility = [\"//visibility:public\"])\n")
+        return
+
+    for raw in repo_ctx.read(log_file).splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        parts = line.split("\t")
+        if len(parts) != 3:
+            continue
+        sha512, integrity, url = parts[0], parts[1], parts[2]
+        if sha512 in seen:
+            continue
+        seen[sha512] = True
+        # Filename = sha512 hex. vcpkg_install reads file.basename to recover
+        # the sha at action time.
+        repo_ctx.download(
+            url = url,
+            output = "downloads/{}".format(sha512),
+            integrity = integrity,
+        )
+        downloads.append(sha512)
+
+    repo_ctx.file(
+        "BUILD.bazel",
+        "\n".join([
+            "filegroup(",
+            "    name = \"all\",",
+            "    srcs = [",
+        ] + [
+            "        \"downloads/{}\",".format(sha) for sha in downloads
+        ] + [
+            "    ],",
+            "    visibility = [\"//visibility:public\"],",
+            ")",
+            "",
+        ]),
+    )
+
+_vcpkg_capture_repo = repository_rule(
+    implementation = _vcpkg_capture_repo_impl,
+    attrs = {
+        "manifest": attr.label(mandatory = True, allow_single_file = True),
+        "triplet": attr.string(mandatory = True),
+        "vcpkg_root_marker": attr.label(mandatory = True, allow_single_file = True),
+    },
+)
+
 def _render_override_kwarg(override_doc):
     # Render an override doc ({"entries": [...]}) as the lines for an
     # `override_json = """..."""` kwarg in a vcpkg_export(...) call.
@@ -253,6 +357,10 @@ def _vcpkg_repo_impl(repo_ctx):
         "    srcs = [],",
         ")",
         "",
+    ]
+
+    downloads_by_triplet = json.decode(repo_ctx.attr.downloads_by_triplet_json)
+    install_block = [
         "vcpkg_install(",
         "    name = \"{}\",".format(vcpkg_install_target_name),
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
@@ -260,9 +368,14 @@ def _vcpkg_repo_impl(repo_ctx):
         "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
         "    home = \":{}_home\",".format(vcpkg_install_target_name),
         "    triplet = \":{}\",".format(triplet_info_target),
-        ")",
-        "",
     ]
+    if downloads_by_triplet:
+        install_block.append("    downloads_by_triplet = {")
+        for t in sorted(downloads_by_triplet.keys()):
+            install_block.append("        \"{}\": \"{}\",".format(t, downloads_by_triplet[t]))
+        install_block.append("    },")
+    install_block += [")", ""]
+    lines += install_block
     # TODO(TheGrizzlyDev): allow the override schema's `deps` field to
     # override the auto-derived vcpkg_deps_by_triplet entries for a package
     # (manual escape hatch when the depend-info-derived graph is wrong).
@@ -321,6 +434,10 @@ vcpkg_repo = repository_rule(
         "triplet_mappings_json": attr.string(
             default = "[]",
             doc = "JSON-encoded list of {constraints, triplet} dicts. See vcpkg.triplet_mapping.",
+        ),
+        "downloads_by_triplet_json": attr.string(
+            default = "{}",
+            doc = "JSON-encoded {triplet: capture_repo_label} for vcpkg's asset cache (one filegroup label per triplet pointing at the @vcpkg_downloads_*//all target).",
         ),
         "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
         "vcpkg_root_marker": attr.label(
@@ -521,6 +638,7 @@ def _vcpkg_mod(module_ctx):
             default_mappings.append({"constraints": canonical, "triplet": dm["triplet"]})
 
     triplet_mappings = user_mappings + default_mappings
+    target_triplets = sorted({tm["triplet"]: True for tm in triplet_mappings}.keys())
 
     for mod in module_ctx.modules:
         for source in mod.tags.source:
@@ -529,6 +647,21 @@ def _vcpkg_mod(module_ctx):
             for pkg in sorted(by_pkg.keys()):
                 applicable[pkg] = {"entries": by_pkg[pkg]}
 
+            # Declare one capture repo per (source, triplet). Each runs vcpkg
+            # to enumerate the assets for its triplet and downloads them via
+            # repo_ctx.download into downloads/<sha512>. The repo exposes a
+            # single `:all` filegroup that vcpkg_install consumes.
+            downloads_by_triplet = {}
+            for triplet in target_triplets:
+                capture_repo = "vcpkg_downloads_{}_{}".format(source.name, triplet.replace("-", "_"))
+                _vcpkg_capture_repo(
+                    name = capture_repo,
+                    manifest = source.manifest,
+                    triplet = triplet,
+                    vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
+                )
+                downloads_by_triplet[triplet] = "@{}//:all".format(capture_repo)
+
             vcpkg_repo(
                 name = source.name,
                 manifest = source.manifest,
@@ -536,6 +669,7 @@ def _vcpkg_mod(module_ctx):
                 vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
                 overrides_json = json.encode(applicable),
                 triplet_mappings_json = json.encode(triplet_mappings),
+                downloads_by_triplet_json = json.encode(downloads_by_triplet),
             )
     return None
 

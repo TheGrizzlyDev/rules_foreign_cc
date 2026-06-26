@@ -79,6 +79,23 @@ def _resolve_override(override_json, triplet, compilation_mode):
     result["_mode_scoped"] = best.get("compilation_mode") != None
     return result
 
+# vcpkg invokes this with `{sha512} {url} {dst}`. We copy the Bazel-staged
+# file at $VCPKG_BAZEL_ASSET_CACHE/<sha512> into the destination vcpkg
+# requested. vcpkg validates the sha512 of the result after we return, so
+# any mismatch fails loudly.
+_ASSET_SERVE_SCRIPT = r"""#!/usr/bin/env bash
+set -euo pipefail
+sha="$1"
+dst="$3"
+src="$VCPKG_BAZEL_ASSET_CACHE/$sha"
+if [ ! -f "$src" ]; then
+  echo "vcpkg asset-serve: missing staged file for sha512 $sha at $src" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "$dst")"
+cp "$src" "$dst"
+"""
+
 _VCPKG_EXPORT_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
 
@@ -367,17 +384,6 @@ def _vcpkg_install_impl(ctx):
 
     declared_inputs = [ctx.file.manifest] + home_inputs + root_files + tools_files_inputs
 
-    inputs = InputFiles(
-        headers = [],
-        include_dirs = [],
-        libs = [],
-        tools_files = tools_files_paths,
-        ext_build_dirs = [],
-        deps_compilation_info = None,
-        deps_linking_info = None,
-        declared_inputs = declared_inputs,
-    )
-
     triplet = _resolve_triplet(ctx)
 
     # TODO(TheGrizzlyDev): support --overlay-ports and --overlay-triplets, with
@@ -388,20 +394,55 @@ def _vcpkg_install_impl(ctx):
     # action-private scratch directory so the vcpkg root archive stays
     # immutable and concurrent actions don't fight over a shared
     # `buildtrees/vcpkg-running.lock`.
+    # Stage Bazel-fetched download files into <scratch>/asset-cache/<sha512>
+    # and write a serve script that vcpkg invokes per asset. Each source file
+    # is named after its sha512 (set by the capture repo at fetch time), so
+    # we can read file.basename to recover the sha at action time.
+    download_target = ctx.attr.downloads_by_triplet.get(triplet)
+    download_files = download_target[DefaultInfo].files.to_list() if download_target else []
+
+    serve_script = ctx.actions.declare_file(ctx.attr.name + "_vcpkg_asset_serve.sh")
+    ctx.actions.write(
+        output = serve_script,
+        content = _ASSET_SERVE_SCRIPT,
+        is_executable = True,
+    )
+
+    stage_lines = ["##mkdirs## $$EXT_BUILD_ROOT$$/{}/asset-cache".format(scratch_dir.path)]
+    for src in download_files:
+        stage_lines.append("cp \"$$EXT_BUILD_ROOT$$/{}\" \"$$EXT_BUILD_ROOT$$/{}/asset-cache/{}\"".format(
+            src.path, scratch_dir.path, src.basename,
+        ))
+
     user_script_lines = [
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
         # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
         # its own into the downloads/ cache.
         "export VCPKG_FORCE_SYSTEM_BINARIES=1",
+        "export VCPKG_BAZEL_ASSET_CACHE=\"$$EXT_BUILD_ROOT$$/{}/asset-cache\"".format(scratch_dir.path),
+    ] + stage_lines + [
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
         "  --x-install-root=\"$$INSTALLDIR$$\" \\",
         "  --x-buildtrees-root=\"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \\".format(scratch_dir.path),
         "  --x-packages-root=\"$$EXT_BUILD_ROOT$$/{}/packages\" \\".format(scratch_dir.path),
         "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
+        "  --x-asset-sources=\"x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}\" \\".format(serve_script.path),
         "  --triplet={}".format(triplet),
     ]
+
+    declared_inputs_final = declared_inputs + download_files + [serve_script]
+    inputs = InputFiles(
+        headers = [],
+        include_dirs = [],
+        libs = [],
+        tools_files = tools_files_paths,
+        ext_build_dirs = [],
+        deps_compilation_info = None,
+        deps_linking_info = None,
+        declared_inputs = declared_inputs_final,
+    )
 
     foreign_cc_install_action(
         ctx,
@@ -413,7 +454,7 @@ def _vcpkg_install_impl(ctx):
         user_script_lines = user_script_lines,
         data_dependencies = ctx.attr.data + ctx.attr.build_data + ctx.attr.toolchains,
         tools_env = tools_env,
-        block_network = False,
+        block_network = True,
     )
 
     return [DefaultInfo(files = depset([install_tree]))]
@@ -442,6 +483,17 @@ _VCPKG_INSTALL_ATTRS.update({
         doc = "A `bazel_skylib` `directory` target used as $HOME for the vcpkg invocation.",
         mandatory = True,
         providers = [DirectoryInfo],
+    ),
+    "downloads_by_triplet": attr.string_keyed_label_dict(
+        doc = (
+            "Per-triplet filegroup containing every asset vcpkg would " +
+            "otherwise fetch over the network. Each file's basename is its " +
+            "sha512 hex. The active triplet's filegroup is staged into the " +
+            "action's scratch dir and served to vcpkg via an x-script asset " +
+            "source so the install doesn't hit the network."
+        ),
+        default = {},
+        allow_files = True,
     ),
     "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
     "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
