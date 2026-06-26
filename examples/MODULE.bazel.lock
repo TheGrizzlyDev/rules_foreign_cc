@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "4iyPf6Db1spDuKcxbC1YB98zddPwtAFnWKzNMQmGeQs=",
+        "bzlTransitiveDigest": "tuyp13Cv6E5ZChlMW5FU7rxsCcuvhn1XzhKeoV8XZcE=",
         "usagesDigest": "xr3TGomiWAMQPV7OeBtyNBM8YX/bjJ5XeRirEoVabDI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
@@ -242,6 +242,28 @@
               "build_file_content": "exports_files([\".vcpkg-root\"])\n\nfilegroup(\n    name = \"srcs\", \n    srcs=glob([\"**/*\"]),\n    visibility = [\"//visibility:public\"],\n)"
             }
           },
+          "vcpkg_cli": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_file",
+            "attributes": {
+              "urls": [
+                "https://github.com/microsoft/vcpkg-tool/releases/download/2026-05-27/vcpkg-macos"
+              ],
+              "sha256": "c34e943e3513e96dc7d9b6a96150a3dc059b92542318af9e993e2dd473cb7fef",
+              "downloaded_file_path": "vcpkg",
+              "executable": true
+            }
+          },
+          "vcpkg_cmake_for_fetch": {
+            "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
+            "attributes": {
+              "urls": [
+                "https://github.com/Kitware/CMake/releases/download/v3.31.12/cmake-3.31.12-macos-universal.tar.gz"
+              ],
+              "strip_prefix": "cmake-3.31.12-macos-universal/CMake.app/Contents",
+              "sha256": "799af7fd545db9bf1b9cfe72f8095880e727a2d4e0df0e3dffc3bc7b95c2d3b0",
+              "build_file_content": "exports_files([\"bin/cmake\"])\n"
+            }
+          },
           "vcpkg_downloads_vcpkg_deps_arm64_linux": {
             "repoRuleId": "@@rules_foreign_cc+//foreign_cc:extensions.bzl%_vcpkg_capture_repo",
             "attributes": {
@@ -250,7 +272,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "arm64-linux",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_arm64_osx": {
@@ -261,7 +285,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "arm64-osx",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_arm64_windows": {
@@ -272,7 +298,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "arm64-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_x64_linux": {
@@ -283,7 +311,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "x64-linux",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_x64_osx": {
@@ -294,7 +324,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "x64-osx",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_x64_windows": {
@@ -305,7 +337,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "x64-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_deps_x86_windows": {
@@ -316,7 +350,9 @@
               "overlay_ports": [],
               "overlay_triplets": [],
               "triplet": "x86-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_deps": {
@@ -330,7 +366,9 @@
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bzip2\":{\"entries\":[{\"defines\":[\"VCPKG_$$VCPKG_PACKAGE_UPPER$$_NAME=\\\"$$VCPKG_PACKAGE$$\\\"\",\"VCPKG_$$VCPKG_PACKAGE_UPPER$$_TRIPLET=\\\"$$VCPKG_TRIPLET$$\\\"\"],\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
               "triplet_mappings_json": "[{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:linux\"],\"triplet\":\"x64-linux\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:linux\"],\"triplet\":\"arm64-linux\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:macos\"],\"triplet\":\"x64-osx\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:macos\"],\"triplet\":\"arm64-osx\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:windows\"],\"triplet\":\"x64-windows\"},{\"constraints\":[\"@@platforms//cpu:x86_32\",\"@@platforms//os:windows\"],\"triplet\":\"x86-windows\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:windows\"],\"triplet\":\"arm64-windows\"}]",
-              "downloads_by_triplet_json": "{\"arm64-linux\":\"@vcpkg_downloads_vcpkg_deps_arm64_linux//:all\",\"arm64-osx\":\"@vcpkg_downloads_vcpkg_deps_arm64_osx//:all\",\"arm64-windows\":\"@vcpkg_downloads_vcpkg_deps_arm64_windows//:all\",\"x64-linux\":\"@vcpkg_downloads_vcpkg_deps_x64_linux//:all\",\"x64-osx\":\"@vcpkg_downloads_vcpkg_deps_x64_osx//:all\",\"x64-windows\":\"@vcpkg_downloads_vcpkg_deps_x64_windows//:all\",\"x86-windows\":\"@vcpkg_downloads_vcpkg_deps_x86_windows//:all\"}"
+              "downloads_by_triplet_json": "{\"arm64-linux\":\"@vcpkg_downloads_vcpkg_deps_arm64_linux//:all\",\"arm64-osx\":\"@vcpkg_downloads_vcpkg_deps_arm64_osx//:all\",\"arm64-windows\":\"@vcpkg_downloads_vcpkg_deps_arm64_windows//:all\",\"x64-linux\":\"@vcpkg_downloads_vcpkg_deps_x64_linux//:all\",\"x64-osx\":\"@vcpkg_downloads_vcpkg_deps_x64_osx//:all\",\"x64-windows\":\"@vcpkg_downloads_vcpkg_deps_x64_windows//:all\",\"x86-windows\":\"@vcpkg_downloads_vcpkg_deps_x86_windows//:all\"}",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_arm64_linux": {
@@ -342,7 +380,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "arm64-linux",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_arm64_osx": {
@@ -354,7 +394,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "arm64-osx",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_arm64_windows": {
@@ -366,7 +408,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "arm64-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_x64_linux": {
@@ -378,7 +422,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "x64-linux",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_x64_osx": {
@@ -390,7 +436,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "x64-osx",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_x64_windows": {
@@ -402,7 +450,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "x64-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_downloads_vcpkg_overlay_deps_x86_windows": {
@@ -414,7 +464,9 @@
               ],
               "overlay_triplets": [],
               "triplet": "x86-windows",
-              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root"
+              "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           },
           "vcpkg_overlay_deps": {
@@ -429,7 +481,9 @@
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bazel-test\":{\"entries\":[{\"out_binaries\":[\"greet\"],\"out_headers_only\":true}]},\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
               "triplet_mappings_json": "[{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:linux\"],\"triplet\":\"x64-linux\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:linux\"],\"triplet\":\"arm64-linux\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:macos\"],\"triplet\":\"x64-osx\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:macos\"],\"triplet\":\"arm64-osx\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:windows\"],\"triplet\":\"x64-windows\"},{\"constraints\":[\"@@platforms//cpu:x86_32\",\"@@platforms//os:windows\"],\"triplet\":\"x86-windows\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:windows\"],\"triplet\":\"arm64-windows\"}]",
-              "downloads_by_triplet_json": "{\"arm64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_linux//:all\",\"arm64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_osx//:all\",\"arm64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_windows//:all\",\"x64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_linux//:all\",\"x64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_osx//:all\",\"x64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_windows//:all\",\"x86-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x86_windows//:all\"}"
+              "downloads_by_triplet_json": "{\"arm64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_linux//:all\",\"arm64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_osx//:all\",\"arm64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_windows//:all\",\"x64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_linux//:all\",\"x64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_osx//:all\",\"x64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_windows//:all\",\"x86-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x86_windows//:all\"}",
+              "vcpkg_cli": "@@rules_foreign_cc++vcpkg+vcpkg_cli//file:vcpkg",
+              "cmake_bin": "@@rules_foreign_cc++vcpkg+vcpkg_cmake_for_fetch//:bin/cmake"
             }
           }
         },

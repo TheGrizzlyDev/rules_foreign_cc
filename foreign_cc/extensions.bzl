@@ -3,8 +3,9 @@
 load("@bazel_features//:features.bzl", "bazel_features")
 load("//foreign_cc:repositories.bzl", "rules_foreign_cc_dependencies")
 load("//toolchains:prebuilt_toolchains.bzl", "prebuilt_toolchains")
-load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive")
+load("@bazel_tools//tools/build_defs/repo:http.bzl", "http_archive", "http_file")
 load("//foreign_cc:vcpkg_overrides.bzl", "DEFAULT_PACKAGE_OVERRIDES")
+load("//toolchains/private:cmake_versions.bzl", "CMAKE_BIN_SRCS")
 
 _DEFAULT_CMAKE_VERSION = "3.31.12"
 _DEFAULT_NINJA_VERSION = "1.13.2"
@@ -60,6 +61,18 @@ tools = module_extension(
     },
 )
 
+def _host_path_env(ctx):
+    """Best-effort fetch of the host PATH so we can prepend our own bin
+    dir without throwing away the user's environment. Falls back to a
+    minimal POSIX default if PATH isn't exported.
+    """
+    result = ctx.execute(["sh", "-c", "echo \"$PATH\""])
+    if result.return_code == 0:
+        path = result.stdout.strip()
+        if path:
+            return path
+    return "/usr/local/bin:/usr/bin:/bin"
+
 def _overlay_dir_for_label(ctx, label):
     """Resolve an overlay label to its package directory on disk.
 
@@ -107,13 +120,8 @@ exit 1
 
 def _vcpkg_capture_repo_impl(repo_ctx):
     vcpkg_root_path = repo_ctx.path(repo_ctx.attr.vcpkg_root_marker).dirname
-    vcpkg_exe_basename = "vcpkg.exe" if repo_ctx.os.name.lower().startswith("windows") else "vcpkg"
-    vcpkg_exe = vcpkg_root_path.get_child(vcpkg_exe_basename)
-    if not vcpkg_exe.exists:
-        host_vcpkg = repo_ctx.which(vcpkg_exe_basename)
-        if host_vcpkg == None:
-            fail("vcpkg: CLI not found in vcpkg root ({}) and not on PATH.".format(vcpkg_exe))
-        vcpkg_exe = host_vcpkg
+    vcpkg_exe = repo_ctx.path(repo_ctx.attr.vcpkg_cli)
+    cmake_bin_dir = repo_ctx.path(repo_ctx.attr.cmake_bin).dirname
 
     capture_script = repo_ctx.path("_capture.sh")
     repo_ctx.file(capture_script, _ASSET_CAPTURE_SCRIPT, executable = True)
@@ -173,6 +181,11 @@ def _vcpkg_capture_repo_impl(repo_ctx):
             "VCPKG_ROOT": str(vcpkg_root_path),
             "VCPKG_BAZEL_CAPTURE_LOG": str(log_file),
             "HOME": str(home_dir),
+            # Force vcpkg to find cmake on PATH rather than downloading its
+            # own copy; the path we prepend points at rules_foreign_cc's
+            # prebuilt cmake archive.
+            "VCPKG_FORCE_SYSTEM_BINARIES": "1",
+            "PATH": "{}:{}".format(cmake_bin_dir, _host_path_env(repo_ctx)),
         },
     )
     # An empty/missing log means vcpkg failed before any port's asset was
@@ -231,6 +244,8 @@ _vcpkg_capture_repo = repository_rule(
         "overlay_triplets": attr.label_list(allow_files = True),
         "triplet": attr.string(mandatory = True),
         "vcpkg_root_marker": attr.label(mandatory = True, allow_single_file = True),
+        "vcpkg_cli": attr.label(mandatory = True, allow_single_file = True),
+        "cmake_bin": attr.label(mandatory = True, allow_single_file = True),
     },
 )
 
@@ -318,13 +333,8 @@ def _vcpkg_repo_impl(repo_ctx):
     # invoke vcpkg from it. `vcpkg_root_marker` is a label into the
     # @<vcpkg_root>//:.vcpkg-root file; its parent directory is the root.
     vcpkg_root_path = repo_ctx.path(repo_ctx.attr.vcpkg_root_marker).dirname
-    vcpkg_exe_basename = "vcpkg.exe" if repo_ctx.os.name.lower().startswith("windows") else "vcpkg"
-    vcpkg_exe = vcpkg_root_path.get_child(vcpkg_exe_basename)
-    if not vcpkg_exe.exists:
-        host_vcpkg = repo_ctx.which(vcpkg_exe_basename)
-        if host_vcpkg == None:
-            fail("vcpkg: CLI not found in vcpkg root ({}) and not on PATH. Bootstrap the root (run `bootstrap-vcpkg.sh`) or install vcpkg on the host.".format(vcpkg_exe))
-        vcpkg_exe = host_vcpkg
+    vcpkg_exe = repo_ctx.path(repo_ctx.attr.vcpkg_cli)
+    cmake_bin_dir = repo_ctx.path(repo_ctx.attr.cmake_bin).dirname
 
     # Per-repo scratch root for vcpkg's mutable directories. Treat the vcpkg
     # root checkout as immutable so concurrent actions don't fight over
@@ -371,6 +381,8 @@ def _vcpkg_repo_impl(repo_ctx):
         result = repo_ctx.execute(cmd, environment = {
             "VCPKG_ROOT": str(vcpkg_root_path),
             "HOME": str(home_dir),
+            "VCPKG_FORCE_SYSTEM_BINARIES": "1",
+            "PATH": "{}:{}".format(cmake_bin_dir, _host_path_env(repo_ctx)),
         })
         if result.return_code != 0:
             fail(
@@ -453,6 +465,7 @@ def _vcpkg_repo_impl(repo_ctx):
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
         "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
+        "    vcpkg_cli = \"{}\",".format(repo_ctx.attr.vcpkg_cli),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
     if repo_ctx.attr.vcpkg_configuration:
@@ -550,6 +563,8 @@ vcpkg_repo = repository_rule(
             doc = "Label of the @<vcpkg_root>//:.vcpkg-root anchor file. Used " +
                   "to resolve the vcpkg root path at fetch time.",
         ),
+        "vcpkg_cli": attr.label(mandatory = True, allow_single_file = True),
+        "cmake_bin": attr.label(mandatory = True, allow_single_file = True),
     }
 )
 
@@ -561,6 +576,57 @@ vcpkg_root_http_archive = tag_class(attrs = {
     "sha256": attr.string(), # TODO(TheGrizzlyDev): add doc
     "strip_prefix": attr.string(), # TODO(TheGrizzlyDev): add doc
 })
+
+# Asset filenames published by github.com/microsoft/vcpkg-tool releases.
+# Keep this list and the default sha256 map below in sync with the chosen
+# default version.
+_DEFAULT_VCPKG_TOOL_VERSION = "2026-05-27"
+_DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET = {
+    "vcpkg-macos": "c34e943e3513e96dc7d9b6a96150a3dc059b92542318af9e993e2dd473cb7fef",
+    "vcpkg-glibc": "459de9d0d4dbdfbec760d87a2d62e48f94c1f60b5473498b4505689df045c35b",
+    "vcpkg-glibc-arm64": "5e5ce3a57c06473f1e8a161d15679860e987d706d5b5259045f6a392fc9acca9",
+    "vcpkg.exe": "da75e3312ff6881c89f6171363eedb92933b0f79456cd6ee636316edef860ff7",
+    "vcpkg-arm64.exe": "371cf5285cc94932b97c8c0774066c90efdb50dfe606113f1686e6e99f928b08",
+}
+
+vcpkg_tool_from_upstream_release = tag_class(attrs = {
+    "version": attr.string(
+        default = _DEFAULT_VCPKG_TOOL_VERSION,
+        doc = "Tag of the github.com/microsoft/vcpkg-tool release to fetch.",
+    ),
+    "sha256_per_asset": attr.string_dict(
+        default = _DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET,
+        doc = (
+            "SHA-256 per release asset filename (e.g. `vcpkg-macos`, " +
+            "`vcpkg-glibc`, `vcpkg.exe`). The extension picks the asset " +
+            "matching the host at fetch time."
+        ),
+    ),
+    "strict_file_set": attr.bool(
+        default = True,
+        doc = (
+            "When True (default), every entry in the default asset set " +
+            "must have an SHA-256 in `sha256_per_asset`. When False, " +
+            "missing entries are tolerated until a fetch on a host that " +
+            "needs that specific asset is attempted."
+        ),
+    ),
+})
+
+def _vcpkg_cli_asset_for_host(os_name, arch):
+    """Pick the upstream release asset matching this host."""
+    os_name = os_name.lower()
+    if os_name.startswith("mac"):
+        return "vcpkg-macos"
+    if os_name.startswith("linux"):
+        if "aarch64" in arch or "arm64" in arch:
+            return "vcpkg-glibc-arm64"
+        return "vcpkg-glibc"
+    if os_name.startswith("windows"):
+        if "aarch64" in arch or "arm64" in arch:
+            return "vcpkg-arm64.exe"
+        return "vcpkg.exe"
+    fail("vcpkg: no upstream release asset known for host os={} arch={}".format(os_name, arch))
 
 vcpkg_source = tag_class(attrs = {
     "name": attr.string(doc = "The name of the workspace generated"),
@@ -721,7 +787,75 @@ def _vcpkg_mod(module_ctx):
             sha256 = "d394626f9205790915c70e1281eb08554e8d72ac0677334893e32636ae08ec3d",
             build_file_content = VCPKG_ROOT_BUILD_FILE,
         )
-        
+
+    # Collect the (single) vcpkg.tool_from_upstream_release tag. Multiple tags
+    # would be ambiguous, so fail if we see more than one.
+    cli_version = _DEFAULT_VCPKG_TOOL_VERSION
+    cli_shas = dict(_DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET)
+    cli_strict = True
+    cli_tag_count = 0
+    for mod in module_ctx.modules:
+        for t in mod.tags.tool_from_upstream_release:
+            cli_tag_count += 1
+            if cli_tag_count > 1:
+                fail("vcpkg: only one vcpkg.tool_from_upstream_release tag is supported per module graph.")
+            cli_version = t.version
+            cli_shas = dict(t.sha256_per_asset)
+            cli_strict = t.strict_file_set
+
+    if cli_strict:
+        for asset in _DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET.keys():
+            if asset not in cli_shas:
+                fail(
+                    "vcpkg.tool_from_upstream_release: missing sha256 for asset " +
+                    "'{}'. Either add it to `sha256_per_asset` or set " +
+                    "`strict_file_set = False` to allow missing entries " +
+                    "(host-specific lookups will still fail if the matching " +
+                    "asset is absent).".format(asset),
+                )
+
+    host_asset = _vcpkg_cli_asset_for_host(module_ctx.os.name, module_ctx.os.arch)
+    if host_asset not in cli_shas:
+        fail(
+            "vcpkg.tool_from_upstream_release: this host needs asset '{}' " +
+            "but it is not listed in `sha256_per_asset`.".format(host_asset),
+        )
+
+    cli_repo_name = "vcpkg_cli"
+    http_file(
+        name = cli_repo_name,
+        urls = [
+            "https://github.com/microsoft/vcpkg-tool/releases/download/{}/{}".format(cli_version, host_asset),
+        ],
+        sha256 = cli_shas[host_asset],
+        downloaded_file_path = "vcpkg.exe" if host_asset.endswith(".exe") else "vcpkg",
+        executable = True,
+    )
+
+    # Hermetic cmake for fetch-time vcpkg invocations: reuse the same prebuilt
+    # cmake spec rules_foreign_cc would set up via `prebuilt_toolchains`.
+    cmake_spec_key = ("macos", "universal")
+    os_l = module_ctx.os.name.lower()
+    arch_l = module_ctx.os.arch.lower()
+    if os_l.startswith("linux"):
+        cmake_spec_key = ("linux", "aarch64" if "aarch64" in arch_l or "arm64" in arch_l else "x86_64")
+    elif os_l.startswith("windows"):
+        cmake_spec_key = ("windows", "x86_64")
+    cmake_spec = CMAKE_BIN_SRCS.get(_DEFAULT_CMAKE_VERSION, {}).get(cmake_spec_key)
+    if cmake_spec == None:
+        fail("vcpkg: no prebuilt cmake spec for version {} on host {}-{}".format(
+            _DEFAULT_CMAKE_VERSION, cmake_spec_key[0], cmake_spec_key[1],
+        ))
+    cmake_for_fetch_repo = "vcpkg_cmake_for_fetch"
+    cmake_build_file = "exports_files([\"bin/{}\"])\n".format(cmake_spec.bin)
+    http_archive(
+        name = cmake_for_fetch_repo,
+        urls = cmake_spec.urls,
+        strip_prefix = cmake_spec.strip_prefix,
+        sha256 = cmake_spec.sha256,
+        build_file_content = cmake_build_file,
+    )
+
     # Aggregate overrides per (source.name, package) into a list of entries.
     # Each `package_override` tag becomes one entry; the entry's optional
     # `triplet` and `compilation_mode` fields scope it. The vcpkg_export rule
@@ -806,6 +940,12 @@ def _vcpkg_mod(module_ctx):
             # to enumerate the assets for its triplet and downloads them via
             # repo_ctx.download into downloads/<sha512>. The repo exposes a
             # single `:all` filegroup that vcpkg_install consumes.
+            # http_file creates `@<repo>//file:<downloaded_file_path>` as the
+            # actual file label (the canonical `@<repo>//file:file` is a
+            # filegroup wrapping it, which can't be used with allow_single_file).
+            vcpkg_cli_basename = "vcpkg.exe" if host_asset.endswith(".exe") else "vcpkg"
+            vcpkg_cli_label = "@{}//file:{}".format(cli_repo_name, vcpkg_cli_basename)
+            cmake_bin_label = "@{}//:bin/{}".format(cmake_for_fetch_repo, cmake_spec.bin)
             downloads_by_triplet = {}
             for triplet in target_triplets:
                 capture_repo = "vcpkg_downloads_{}_{}".format(source.name, triplet.replace("-", "_"))
@@ -817,6 +957,8 @@ def _vcpkg_mod(module_ctx):
                     overlay_triplets = source.overlay_triplets,
                     triplet = triplet,
                     vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
+                    vcpkg_cli = vcpkg_cli_label,
+                    cmake_bin = cmake_bin_label,
                 )
                 downloads_by_triplet[triplet] = "@{}//:all".format(capture_repo)
 
@@ -831,6 +973,8 @@ def _vcpkg_mod(module_ctx):
                 overrides_json = json.encode(applicable),
                 triplet_mappings_json = json.encode(triplet_mappings),
                 downloads_by_triplet_json = json.encode(downloads_by_triplet),
+                vcpkg_cli = vcpkg_cli_label,
+                cmake_bin = cmake_bin_label,
             )
     return None
 
@@ -839,6 +983,7 @@ vcpkg = module_extension(
     implementation = _vcpkg_mod,
     tag_classes = {
         "vcpkg_root_http_archive": vcpkg_root_http_archive,
+        "tool_from_upstream_release": vcpkg_tool_from_upstream_release,
         "source": vcpkg_source,
         "package_override": vcpkg_package_override,
         "triplet_mapping": vcpkg_triplet_mapping,

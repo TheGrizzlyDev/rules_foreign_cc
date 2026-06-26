@@ -4,6 +4,13 @@
 # against the docs but have not been exercised on a Windows host. Validate
 # with a Windows CI runner before claiming first-class support.
 
+# TODO(TheGrizzlyDev): the vcpkg CLI is currently surfaced as a label attr
+# (`vcpkg_cli` on vcpkg_install + label-only plumbing in repo rules). Migrate
+# to a proper Bazel toolchain (toolchain_type + register_toolchains) once we
+# have a credible cross-platform story for repo-rule consumption — `module_ctx`
+# can't resolve toolchains, so the migration needs a parallel mechanism (or a
+# fetch-time fallback) for that case.
+
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
 load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
@@ -642,8 +649,11 @@ def _vcpkg_install_impl(ctx):
     for tgt in ctx.attr.overlay_ports + ctx.attr.overlay_triplets:
         overlay_inputs += tgt[DefaultInfo].files.to_list()
 
+    vcpkg_cli = ctx.file.vcpkg_cli
+    if vcpkg_cli == None:
+        fail("vcpkg_install: `vcpkg_cli` is required (typically wired by the vcpkg module extension).")
     install_cmd_lines = [
-        "vcpkg install \\",
+        "\"$$EXT_BUILD_ROOT$$/{}\" install \\".format(vcpkg_cli.path),
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
         "  --x-install-root=\"$$INSTALLDIR$$\" \\",
         "  --x-buildtrees-root=\"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \\".format(scratch_dir.path),
@@ -667,7 +677,7 @@ def _vcpkg_install_impl(ctx):
         "export VCPKG_BAZEL_ASSET_CACHE=\"$$EXT_BUILD_ROOT$$/{}/asset-cache\"".format(scratch_dir.path),
     ] + stage_lines + install_cmd_lines
 
-    declared_inputs_final = declared_inputs + download_files + [serve_script] + overlay_inputs
+    declared_inputs_final = declared_inputs + download_files + [serve_script, vcpkg_cli] + overlay_inputs
     if config_file != None:
         declared_inputs_final = declared_inputs_final + [config_file]
     inputs = InputFiles(
@@ -724,6 +734,11 @@ _VCPKG_INSTALL_ATTRS.update({
         allow_files = True,
     ),
     "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
+    "vcpkg_cli": attr.label(
+        doc = "The vcpkg binary used to drive `vcpkg install`.",
+        allow_single_file = True,
+        cfg = "exec",
+    ),
     "vcpkg_configuration": attr.label(
         doc = (
             "Optional vcpkg-configuration.json. Must live in the same Bazel " +
