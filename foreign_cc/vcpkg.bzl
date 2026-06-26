@@ -12,6 +12,13 @@ load(
     "//foreign_cc/private/framework:platform.bzl",
     "VcpkgTripletInfo",
 )
+load(
+    "//toolchains/native_tools:tool_access.bzl",
+    "get_cmake_data",
+    "get_make_data",
+    "get_ninja_data",
+    "get_pkgconfig_data",
+)
 
 _DEFAULT_TRIPLET = Label("//foreign_cc/private/framework:vcpkg_triplet_info")
 
@@ -249,6 +256,8 @@ def _vcpkg_export_impl(ctx):
     )
 
     dep_cc_infos = [dep[CcInfo] for dep in ctx.attr.deps]
+    for triplet_dep in ctx.attr.vcpkg_deps_by_triplet.get(triplet, []):
+        dep_cc_infos.append(triplet_dep[CcInfo])
     merged = cc_common.merge_cc_infos(cc_infos = [
         CcInfo(compilation_context = compilation_context, linking_context = linking_context),
     ] + dep_cc_infos)
@@ -312,25 +321,57 @@ vcpkg_export = rule(
             default = _DEFAULT_TRIPLET,
             providers = [VcpkgTripletInfo],
         ),
+        "vcpkg_deps_by_triplet": attr.string_keyed_label_dict(
+            doc = (
+                "Per-triplet dependency list. The entry whose key matches the " +
+                "resolved triplet is merged into this target's CcInfo. " +
+                "Typically populated by the module extension from " +
+                "`vcpkg depend-info`; users should not need to set this " +
+                "directly — declare deps in MODULE.bazel instead."
+            ),
+            default = {},
+            providers = [CcInfo],
+        ),
     },
     provides = [CcInfo],
 )
 
 def _vcpkg_install_impl(ctx):
     install_tree = ctx.actions.declare_directory("%s_install_tree" % ctx.attr.name)
+    # Action-private scratch for vcpkg's mutable directories (buildtrees,
+    # packages, downloads). Keeps the vcpkg root archive immutable so
+    # concurrent actions don't fight over `buildtrees/vcpkg-running.lock`.
+    scratch_dir = ctx.actions.declare_directory("%s_vcpkg_scratch" % ctx.attr.name)
 
     home_info = ctx.attr.home[DirectoryInfo]
     home_path = home_info.path
     home_inputs = home_info.transitive_files.to_list()
 
     root_files = ctx.attr.root[DefaultInfo].files.to_list()
-    declared_inputs = [ctx.file.manifest] + home_inputs + root_files
+
+    tools_data = [
+        get_cmake_data(ctx),
+        get_ninja_data(ctx),
+        get_make_data(ctx),
+        get_pkgconfig_data(ctx),
+    ]
+    tools_files_paths = []
+    tools_files_inputs = []
+    tools_env = {}
+    for td in tools_data:
+        tools_files_paths.append(td.path)
+        if td.target:
+            tools_files_inputs += td.target.files.to_list()
+        if td.env:
+            tools_env.update(td.env)
+
+    declared_inputs = [ctx.file.manifest] + home_inputs + root_files + tools_files_inputs
 
     inputs = InputFiles(
         headers = [],
         include_dirs = [],
         libs = [],
-        tools_files = [],
+        tools_files = tools_files_paths,
         ext_build_dirs = [],
         deps_compilation_info = None,
         deps_linking_info = None,
@@ -343,12 +384,22 @@ def _vcpkg_install_impl(ctx):
     # the directories staged into the install action's sandbox. Triplets
     # discovered via overlay_triplets should also be valid keys for
     # vcpkg.triplet_mapping.
+    # Redirect every mutable vcpkg dir out of VCPKG_ROOT into this target's
+    # action-private scratch directory so the vcpkg root archive stays
+    # immutable and concurrent actions don't fight over a shared
+    # `buildtrees/vcpkg-running.lock`.
     user_script_lines = [
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
+        # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
+        # its own into the downloads/ cache.
+        "export VCPKG_FORCE_SYSTEM_BINARIES=1",
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
         "  --x-install-root=\"$$INSTALLDIR$$\" \\",
+        "  --x-buildtrees-root=\"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \\".format(scratch_dir.path),
+        "  --x-packages-root=\"$$EXT_BUILD_ROOT$$/{}/packages\" \\".format(scratch_dir.path),
+        "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
         "  --triplet={}".format(triplet),
     ]
 
@@ -357,10 +408,11 @@ def _vcpkg_install_impl(ctx):
         name = ctx.attr.name,
         mnemonic = "VcpkgInstall",
         install_root = install_tree.path,
-        declared_outputs = [install_tree],
+        declared_outputs = [install_tree, scratch_dir],
         inputs = inputs,
         user_script_lines = user_script_lines,
         data_dependencies = ctx.attr.data + ctx.attr.build_data + ctx.attr.toolchains,
+        tools_env = tools_env,
         block_network = False,
     )
 

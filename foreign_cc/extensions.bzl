@@ -71,6 +71,47 @@ def _render_override_kwarg(override_doc):
     pretty = json.encode_indent(override_doc, indent = "  ")
     return ["    override_json = \"\"\""] + pretty.splitlines() + ["\"\"\","]
 
+def _list_triplets(repo_ctx, vcpkg_root_path):
+    """Enumerate triplet names from <vcpkg_root>/triplets and .../community."""
+    triplets = []
+    for sub in ("triplets", "triplets/community"):
+        d = vcpkg_root_path.get_child(sub)
+        if not d.exists:
+            continue
+        for child in d.readdir():
+            name = child.basename
+            if name.endswith(".cmake"):
+                triplets.append(name[:-len(".cmake")])
+    return sorted(triplets)
+
+def _parse_depend_info_list(stdout):
+    """Parse `vcpkg depend-info --format=list` output into {pkg: [direct_deps]}.
+
+    The format is one line per package: `<pkg>[feature info]: <comma-separated deps>`
+    Lines without ":" are ignored. Deps that look like features (contain `[`)
+    are stripped to their base package name.
+    """
+    result = {}
+    for raw in stdout.splitlines():
+        line = raw.strip()
+        if not line or ":" not in line:
+            continue
+        head, _, tail = line.partition(":")
+        # Strip feature qualifiers like "pkg[feat1, feat2]" -> "pkg"
+        pkg = head.split("[", 1)[0].strip()
+        if not pkg:
+            continue
+        deps = []
+        for d in tail.split(","):
+            d = d.strip()
+            if not d:
+                continue
+            d = d.split("[", 1)[0].strip()
+            if d and d != pkg:
+                deps.append(d)
+        result[pkg] = deps
+    return result
+
 def _vcpkg_repo_impl(repo_ctx):
     vcpkg_install_target_name = "install_tree"
 
@@ -91,6 +132,63 @@ def _vcpkg_repo_impl(repo_ctx):
     overrides_by_pkg = json.decode(repo_ctx.attr.overrides_json)
 
     triplet_mappings = json.decode(repo_ctx.attr.triplet_mappings_json)
+
+    # Resolve the vcpkg root checkout path so we can enumerate triplets and
+    # invoke vcpkg from it. `vcpkg_root_marker` is a label into the
+    # @<vcpkg_root>//:.vcpkg-root file; its parent directory is the root.
+    vcpkg_root_path = repo_ctx.path(repo_ctx.attr.vcpkg_root_marker).dirname
+    vcpkg_exe_basename = "vcpkg.exe" if repo_ctx.os.name.lower().startswith("windows") else "vcpkg"
+    vcpkg_exe = vcpkg_root_path.get_child(vcpkg_exe_basename)
+    if not vcpkg_exe.exists:
+        host_vcpkg = repo_ctx.which(vcpkg_exe_basename)
+        if host_vcpkg == None:
+            fail("vcpkg: CLI not found in vcpkg root ({}) and not on PATH. Bootstrap the root (run `bootstrap-vcpkg.sh`) or install vcpkg on the host.".format(vcpkg_exe))
+        vcpkg_exe = host_vcpkg
+
+    # Per-repo scratch root for vcpkg's mutable directories. Treat the vcpkg
+    # root checkout as immutable so concurrent actions don't fight over
+    # `buildtrees/vcpkg-running.lock`. The repo name segment scopes the
+    # scratch path so multiple `vcpkg.source(...)` repos don't collide.
+    scratch_root = repo_ctx.path(".vcpkg-scratch/{}".format(repo_ctx.name))
+
+    # Run depend-info only for triplets the user actually maps to (via
+    # vcpkg.triplet_mapping, including built-in defaults). Iterating every
+    # community triplet would shell out 100+ times for triplets we never
+    # build for and many of which fail (cross-toolchains, host mismatches).
+    target_triplets = sorted({tm["triplet"]: True for tm in triplet_mappings}.keys())
+
+    # TODO(TheGrizzlyDev): the vcpkg_deps_by_triplet wiring below has only
+    # been exercised against leaf packages (fmt/jsoncpp/bzip2), so the dict
+    # comes out empty in our example BUILDs. Add an example using a
+    # non-leaf vcpkg package (e.g. openssl -> {ssl, crypto} or anything with
+    # transitive deps) so depend-info actually emits a `vcpkg_deps_by_triplet`
+    # kwarg and the consuming CcInfo merge is exercised end-to-end.
+    deps_by_triplet_by_pkg = {}  # pkg -> {triplet: [direct deps]}
+    manifest_dir = manifest_path.dirname
+    for triplet in target_triplets:
+        triplet_scratch = "{}/depend-info/{}".format(scratch_root, triplet)
+        result = repo_ctx.execute([
+            str(vcpkg_exe),
+            "depend-info",
+            "--format=list",
+            "--x-manifest-root={}".format(manifest_dir),
+            "--triplet={}".format(triplet),
+            "--x-install-root={}/installed".format(triplet_scratch),
+            "--x-buildtrees-root={}/buildtrees".format(triplet_scratch),
+            "--x-packages-root={}/packages".format(triplet_scratch),
+            "--downloads-root={}/downloads".format(triplet_scratch),
+        ], environment = {"VCPKG_ROOT": str(vcpkg_root_path)})
+        if result.return_code != 0:
+            fail(
+                "vcpkg depend-info failed for triplet '{}'.\nstderr:\n{}\nstdout:\n{}".format(
+                    triplet,
+                    result.stderr,
+                    result.stdout,
+                ),
+            )
+        graph = _parse_depend_info_list(result.stdout)
+        for pkg, deps in graph.items():
+            deps_by_triplet_by_pkg.setdefault(pkg, {})[triplet] = deps
 
     # Emit one config_setting per unique constraint set. Two mappings that
     # share a constraint set but resolve to different triplets are an
@@ -165,15 +263,23 @@ def _vcpkg_repo_impl(repo_ctx):
         ")",
         "",
     ]
-    # TODO(TheGrizzlyDev): wire vcpkg_export.deps from the override schema so
-    # link order between packages (e.g. openssl: ssl -> crypto) is correct.
-    # TODO(TheGrizzlyDev): auto-derive vcpkg_export.deps by running
-    # `vcpkg depend-info <pkg> --format=tree` from _vcpkg_mod and parsing the
-    # resolved dep graph; user-declared deps in the override schema still win.
+    # TODO(TheGrizzlyDev): allow the override schema's `deps` field to
+    # override the auto-derived vcpkg_deps_by_triplet entries for a package
+    # (manual escape hatch when the depend-info-derived graph is wrong).
     # TODO(TheGrizzlyDev): surface tools/* binaries when the override schema's
     # `out_binaries` field is populated. Today tools/* is unconditionally
     # filtered out by the export script.
-    for pkg in packages:
+    # Collect every package that appears anywhere in the resolved dep graph
+    # (across any triplet), not just the top-level manifest deps. Transitive
+    # vcpkg_export targets need to exist for the deps to point at them.
+    all_packages = {p: True for p in packages}
+    for pkg, by_triplet in deps_by_triplet_by_pkg.items():
+        all_packages[pkg] = True
+        for triplet_deps in by_triplet.values():
+            for d in triplet_deps:
+                all_packages[d] = True
+
+    for pkg in sorted(all_packages.keys()):
         block = [
             "vcpkg_export(",
             "    name = \"{}\",".format(pkg),
@@ -185,6 +291,15 @@ def _vcpkg_repo_impl(repo_ctx):
         rendered = _render_override_kwarg(overrides_by_pkg.get(pkg) or {})
         if rendered:
             block += rendered
+
+        by_triplet = deps_by_triplet_by_pkg.get(pkg) or {}
+        non_empty = {t: d for t, d in by_triplet.items() if d}
+        if non_empty:
+            block.append("    vcpkg_deps_by_triplet = {")
+            for triplet in sorted(non_empty.keys()):
+                deps_str = ", ".join(["\":{}\"".format(d) for d in sorted(non_empty[triplet])])
+                block.append("        \"{}\": [{}],".format(triplet, deps_str))
+            block.append("    },")
 
         block += [
             "    visibility = [\"//visibility:public\"],",
@@ -208,6 +323,12 @@ vcpkg_repo = repository_rule(
             doc = "JSON-encoded list of {constraints, triplet} dicts. See vcpkg.triplet_mapping.",
         ),
         "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
+        "vcpkg_root_marker": attr.label(
+            mandatory = True,
+            allow_single_file = True,
+            doc = "Label of the @<vcpkg_root>//:.vcpkg-root anchor file. Used " +
+                  "to resolve the vcpkg root path at fetch time.",
+        ),
     }
 )
 
@@ -412,6 +533,7 @@ def _vcpkg_mod(module_ctx):
                 name = source.name,
                 manifest = source.manifest,
                 vcpkg_root = vcpkg_repo_name(source.root),
+                vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
                 overrides_json = json.encode(applicable),
                 triplet_mappings_json = json.encode(triplet_mappings),
             )
