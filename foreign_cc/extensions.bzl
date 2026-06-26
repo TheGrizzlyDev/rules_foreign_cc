@@ -165,11 +165,14 @@ def _vcpkg_capture_repo_impl(repo_ctx):
     for p in overlay_triplets_paths:
         cmd.append("--overlay-triplets={}".format(p))
 
+    home_dir = repo_ctx.path("_scratch/home")
+    repo_ctx.execute(["mkdir", "-p", str(home_dir)])
     result = repo_ctx.execute(
         cmd,
         environment = {
             "VCPKG_ROOT": str(vcpkg_root_path),
             "VCPKG_BAZEL_CAPTURE_LOG": str(log_file),
+            "HOME": str(home_dir),
         },
     )
     # An empty/missing log means vcpkg failed before any port's asset was
@@ -344,6 +347,8 @@ def _vcpkg_repo_impl(repo_ctx):
     for p in overlay_ports_paths + overlay_triplets_paths:
         _watch_tree(repo_ctx, p)
 
+    home_dir = repo_ctx.path("{}/home".format(scratch_root))
+    repo_ctx.execute(["mkdir", "-p", str(home_dir)])
     deps_by_triplet_by_pkg = {}  # pkg -> {triplet: [direct deps]}
     manifest_dir = manifest_path.dirname
     for triplet in target_triplets:
@@ -363,7 +368,10 @@ def _vcpkg_repo_impl(repo_ctx):
             cmd.append("--overlay-ports={}".format(p))
         for p in overlay_triplets_paths:
             cmd.append("--overlay-triplets={}".format(p))
-        result = repo_ctx.execute(cmd, environment = {"VCPKG_ROOT": str(vcpkg_root_path)})
+        result = repo_ctx.execute(cmd, environment = {
+            "VCPKG_ROOT": str(vcpkg_root_path),
+            "HOME": str(home_dir),
+        })
         if result.return_code != 0:
             fail(
                 "vcpkg depend-info failed for triplet '{}'.\nstderr:\n{}\nstdout:\n{}".format(
@@ -433,17 +441,10 @@ def _vcpkg_repo_impl(repo_ctx):
     ]
 
     lines = [
-        "load(\"@bazel_skylib//rules/directory:directory.bzl\", \"directory\")",
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
         "load(\"@rules_foreign_cc//foreign_cc/private/framework:platform.bzl\", \"vcpkg_triplet_info_from_mappings\")",
         "",
-    ] + config_setting_blocks + triplet_info_blocks + [
-        "directory(",
-        "    name = \"{}_home\",".format(vcpkg_install_target_name),
-        "    srcs = [],",
-        ")",
-        "",
-    ]
+    ] + config_setting_blocks + triplet_info_blocks
 
     downloads_by_triplet = json.decode(repo_ctx.attr.downloads_by_triplet_json)
     install_block = [
@@ -452,7 +453,6 @@ def _vcpkg_repo_impl(repo_ctx):
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
         "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
-        "    home = \":{}_home\",".format(vcpkg_install_target_name),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
     if repo_ctx.attr.vcpkg_configuration:

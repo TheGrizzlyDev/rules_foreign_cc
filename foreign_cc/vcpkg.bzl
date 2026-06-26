@@ -542,13 +542,9 @@ vcpkg_export = rule(
 def _vcpkg_install_impl(ctx):
     install_tree = ctx.actions.declare_directory("%s_install_tree" % ctx.attr.name)
     # Action-private scratch for vcpkg's mutable directories (buildtrees,
-    # packages, downloads). Keeps the vcpkg root archive immutable so
+    # packages, downloads, home). Keeps the vcpkg root archive immutable so
     # concurrent actions don't fight over `buildtrees/vcpkg-running.lock`.
     scratch_dir = ctx.actions.declare_directory("%s_vcpkg_scratch" % ctx.attr.name)
-
-    home_info = ctx.attr.home[DirectoryInfo]
-    home_path = home_info.path
-    home_inputs = home_info.transitive_files.to_list()
 
     root_files = ctx.attr.root[DefaultInfo].files.to_list()
 
@@ -568,7 +564,7 @@ def _vcpkg_install_impl(ctx):
         if td.env:
             tools_env.update(td.env)
 
-    declared_inputs = [ctx.file.manifest] + home_inputs + root_files + tools_files_inputs
+    declared_inputs = [ctx.file.manifest] + root_files + tools_files_inputs
 
     triplet = _resolve_triplet(ctx)
 
@@ -633,7 +629,8 @@ def _vcpkg_install_impl(ctx):
     install_cmd_lines.append("  --triplet={}".format(triplet))
 
     user_script_lines = [
-        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
+        "mkdir -p \"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
+        "export HOME=\"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
         # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
         # its own into the downloads/ cache.
@@ -685,15 +682,6 @@ _VCPKG_INSTALL_ATTRS.update({
         allow_files = True,
         cfg = "target",
         default = [],
-    ),
-    # TODO(TheGrizzlyDev): move this directory inside the rule so callers
-    # don't have to know it exists. Today the generated repo emits a separate
-    # `directory(name = "install_tree_home", srcs = [])` target and wires it
-    # in via this attr — the indirection is load-bearing but not obvious.
-    "home": attr.label(
-        doc = "A `bazel_skylib` `directory` target used as $HOME for the vcpkg invocation.",
-        mandatory = True,
-        providers = [DirectoryInfo],
     ),
     "downloads_by_triplet": attr.string_keyed_label_dict(
         doc = (
