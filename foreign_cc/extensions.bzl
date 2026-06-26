@@ -86,7 +86,11 @@ def _vcpkg_capture_repo_impl(repo_ctx):
     capture_script = repo_ctx.path("_capture.sh")
     repo_ctx.file(capture_script, _ASSET_CAPTURE_SCRIPT, executable = True)
 
-    manifest_dir = repo_ctx.path(repo_ctx.attr.manifest).dirname
+    manifest_path = repo_ctx.path(repo_ctx.attr.manifest)
+    # Refetch whenever the manifest changes — its content drives the set of
+    # assets, not just its label identity.
+    repo_ctx.watch(manifest_path)
+    manifest_dir = manifest_path.dirname
     triplet = repo_ctx.attr.triplet
     log_file = repo_ctx.path("_capture.log")
     scratch = repo_ctx.path("_scratch")
@@ -188,29 +192,37 @@ def _list_triplets(repo_ctx, vcpkg_root_path):
                 triplets.append(name[:-len(".cmake")])
     return sorted(triplets)
 
+def _strip_pkg_qualifiers(name):
+    # vcpkg names can carry `[feature]` (feature) and `:host` (build for
+    # host triplet) qualifiers. For Bazel target purposes we collapse to
+    # the bare package name.
+    return name.split("[", 1)[0].split(":", 1)[0].strip()
+
 def _parse_depend_info_list(stdout):
     """Parse `vcpkg depend-info --format=list` output into {pkg: [direct_deps]}.
 
-    The format is one line per package: `<pkg>[feature info]: <comma-separated deps>`
-    Lines without ":" are ignored. Deps that look like features (contain `[`)
-    are stripped to their base package name.
+    The format is one line per package: `<pkg>[feature info][:host]: <comma-separated deps>`
+    The head/tail separator is `": "` (colon-space) so the optional `:host`
+    suffix on the head doesn't confuse the split.
     """
     result = {}
     for raw in stdout.splitlines():
         line = raw.strip()
-        if not line or ":" not in line:
+        if not line or ": " not in line:
+            # vcpkg also emits empty-deps lines as `<pkg>: ` (with trailing
+            # space stripped by the raw read). Accept those too.
+            if line.endswith(":"):
+                pkg = _strip_pkg_qualifiers(line[:-1])
+                if pkg:
+                    result.setdefault(pkg, [])
             continue
-        head, _, tail = line.partition(":")
-        # Strip feature qualifiers like "pkg[feat1, feat2]" -> "pkg"
-        pkg = head.split("[", 1)[0].strip()
+        head, _, tail = line.partition(": ")
+        pkg = _strip_pkg_qualifiers(head)
         if not pkg:
             continue
         deps = []
         for d in tail.split(","):
-            d = d.strip()
-            if not d:
-                continue
-            d = d.split("[", 1)[0].strip()
+            d = _strip_pkg_qualifiers(d)
             if d and d != pkg:
                 deps.append(d)
         result[pkg] = deps
@@ -220,6 +232,7 @@ def _vcpkg_repo_impl(repo_ctx):
     vcpkg_install_target_name = "install_tree"
 
     manifest_path = repo_ctx.path(repo_ctx.attr.manifest)
+    repo_ctx.watch(manifest_path)
     manifest = json.decode(repo_ctx.read(manifest_path))
     packages = []
     # TODO(TheGrizzlyDev): handle object-form dependency entries beyond their
@@ -261,12 +274,6 @@ def _vcpkg_repo_impl(repo_ctx):
     # build for and many of which fail (cross-toolchains, host mismatches).
     target_triplets = sorted({tm["triplet"]: True for tm in triplet_mappings}.keys())
 
-    # TODO(TheGrizzlyDev): the vcpkg_deps_by_triplet wiring below has only
-    # been exercised against leaf packages (fmt/jsoncpp/bzip2), so the dict
-    # comes out empty in our example BUILDs. Add an example using a
-    # non-leaf vcpkg package (e.g. openssl -> {ssl, crypto} or anything with
-    # transitive deps) so depend-info actually emits a `vcpkg_deps_by_triplet`
-    # kwarg and the consuming CcInfo merge is exercised end-to-end.
     deps_by_triplet_by_pkg = {}  # pkg -> {triplet: [direct deps]}
     manifest_dir = manifest_path.dirname
     for triplet in target_triplets:
@@ -290,7 +297,9 @@ def _vcpkg_repo_impl(repo_ctx):
                     result.stdout,
                 ),
             )
-        graph = _parse_depend_info_list(result.stdout)
+        # vcpkg writes the dep list to stderr (stdout is empty), so parse
+        # both to be robust.
+        graph = _parse_depend_info_list(result.stdout + "\n" + result.stderr)
         for pkg, deps in graph.items():
             deps_by_triplet_by_pkg.setdefault(pkg, {})[triplet] = deps
 
@@ -299,6 +308,7 @@ def _vcpkg_repo_impl(repo_ctx):
     # ambiguity the user must resolve — fail eagerly with the list.
     config_setting_for = {}  # constraint-set tuple -> config_setting name
     triplet_for_key = {}     # constraint-set tuple -> triplet name (for dup check)
+    config_setting_for_triplet = {}  # triplet name -> ":<config_setting>" label
     config_setting_blocks = []
     triplet_select = {}
     triplet_select_keys = []  # preserve insertion order for stable BUILD
@@ -332,6 +342,7 @@ def _vcpkg_repo_impl(repo_ctx):
         label = ":" + name
         triplet_select_keys.append(label)
         triplet_select[label] = tm["triplet"]
+        config_setting_for_triplet[tm["triplet"]] = label
 
     triplet_info_target = "vcpkg_triplet_info"
     triplet_info_blocks = [
@@ -408,11 +419,17 @@ def _vcpkg_repo_impl(repo_ctx):
         by_triplet = deps_by_triplet_by_pkg.get(pkg) or {}
         non_empty = {t: d for t, d in by_triplet.items() if d}
         if non_empty:
-            block.append("    vcpkg_deps_by_triplet = {")
+            # Emit `deps = select({"<config_setting>": [...], ...})`. The
+            # active triplet's config_setting picks the right list at
+            # analysis time.
+            block.append("    deps = select({")
             for triplet in sorted(non_empty.keys()):
+                cs = config_setting_for_triplet.get(triplet)
+                if cs == None:
+                    continue
                 deps_str = ", ".join(["\":{}\"".format(d) for d in sorted(non_empty[triplet])])
-                block.append("        \"{}\": [{}],".format(triplet, deps_str))
-            block.append("    },")
+                block.append("        \"{}\": [{}],".format(cs, deps_str))
+            block.append("    }),")
 
         block += [
             "    visibility = [\"//visibility:public\"],",

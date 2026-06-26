@@ -179,4 +179,33 @@ vcpkg.package_override(
     out_static_libs = ["jsoncpp"],
 )
 
+# libpng's static lib is libpng16.a (not libpng.a) and its only link-time
+# dep is zlib (depend-info wires that automatically).
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "libpng",
+    out_static_libs = ["png16"],
+)
+
+# vcpkg installs zlib as libz.a, not libzlib.a.
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "zlib",
+    out_static_libs = ["z"],
+)
+
+# vcpkg-cmake* are build-system bookkeeping ports with no link artifacts;
+# mark them headers-only so the dependency edges from libpng -> zlib (which
+# also pull these in via depend-info) don't try to link non-existent libs.
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "vcpkg-cmake",
+    out_headers_only = True,
+)
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "vcpkg-cmake-config",
+    out_headers_only = True,
+)
+
 use_repo(vcpkg, "vcpkg_deps")

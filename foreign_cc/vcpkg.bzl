@@ -273,8 +273,6 @@ def _vcpkg_export_impl(ctx):
     )
 
     dep_cc_infos = [dep[CcInfo] for dep in ctx.attr.deps]
-    for triplet_dep in ctx.attr.vcpkg_deps_by_triplet.get(triplet, []):
-        dep_cc_infos.append(triplet_dep[CcInfo])
     merged = cc_common.merge_cc_infos(cc_infos = [
         CcInfo(compilation_context = compilation_context, linking_context = linking_context),
     ] + dep_cc_infos)
@@ -337,17 +335,6 @@ vcpkg_export = rule(
             ),
             default = _DEFAULT_TRIPLET,
             providers = [VcpkgTripletInfo],
-        ),
-        "vcpkg_deps_by_triplet": attr.string_keyed_label_dict(
-            doc = (
-                "Per-triplet dependency list. The entry whose key matches the " +
-                "resolved triplet is merged into this target's CcInfo. " +
-                "Typically populated by the module extension from " +
-                "`vcpkg depend-info`; users should not need to set this " +
-                "directly — declare deps in MODULE.bazel instead."
-            ),
-            default = {},
-            providers = [CcInfo],
         ),
     },
     provides = [CcInfo],
