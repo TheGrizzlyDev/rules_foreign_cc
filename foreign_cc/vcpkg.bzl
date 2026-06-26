@@ -37,6 +37,24 @@ def _resolve_triplet(ctx):
         )
     return triplet
 
+def _resolve_overlay_dirs(targets):
+    """Map each overlay target to a single directory exec path.
+
+    Accepts either a `bazel_skylib` `directory` target (uses DirectoryInfo.path)
+    or any file-providing target (uses the common parent dirname of its files,
+    falling back to the dirname of the first file).
+    """
+    dirs = []
+    for tgt in targets:
+        if DirectoryInfo in tgt:
+            dirs.append(tgt[DirectoryInfo].path)
+            continue
+        files = tgt[DefaultInfo].files.to_list()
+        if not files:
+            fail("vcpkg_install: overlay target {} has no files.".format(tgt.label))
+        dirs.append(files[0].dirname)
+    return dirs
+
 _OVERRIDE_PAYLOAD_FIELDS = (
     "out_static_libs",
     "out_shared_libs",
@@ -489,14 +507,24 @@ def _vcpkg_install_impl(ctx):
             src.path, scratch_dir.path, src.basename,
         ))
 
-    user_script_lines = [
-        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
-        "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
-        # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
-        # its own into the downloads/ cache.
-        "export VCPKG_FORCE_SYSTEM_BINARIES=1",
-        "export VCPKG_BAZEL_ASSET_CACHE=\"$$EXT_BUILD_ROOT$$/{}/asset-cache\"".format(scratch_dir.path),
-    ] + stage_lines + [
+    # Optional vcpkg-configuration.json: must live next to the manifest so
+    # vcpkg auto-loads it from --x-manifest-root.
+    config_file = ctx.file.vcpkg_configuration
+    if config_file != None and config_file.dirname != ctx.file.manifest.dirname:
+        fail(
+            "vcpkg_install: vcpkg_configuration ({}) must live in the same " +
+            "Bazel package as manifest ({}); vcpkg auto-loads it from " +
+            "--x-manifest-root.".format(config_file.path, ctx.file.manifest.path),
+        )
+
+    overlay_ports_dirs = _resolve_overlay_dirs(ctx.attr.overlay_ports)
+    overlay_triplets_dirs = _resolve_overlay_dirs(ctx.attr.overlay_triplets)
+
+    overlay_inputs = []
+    for tgt in ctx.attr.overlay_ports + ctx.attr.overlay_triplets:
+        overlay_inputs += tgt[DefaultInfo].files.to_list()
+
+    install_cmd_lines = [
         "vcpkg install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
         "  --x-install-root=\"$$INSTALLDIR$$\" \\",
@@ -504,10 +532,25 @@ def _vcpkg_install_impl(ctx):
         "  --x-packages-root=\"$$EXT_BUILD_ROOT$$/{}/packages\" \\".format(scratch_dir.path),
         "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
         "  --x-asset-sources=\"x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}\" \\".format(serve_script.path),
-        "  --triplet={}".format(triplet),
     ]
+    for d in overlay_ports_dirs:
+        install_cmd_lines.append("  --overlay-ports=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
+    for d in overlay_triplets_dirs:
+        install_cmd_lines.append("  --overlay-triplets=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
+    install_cmd_lines.append("  --triplet={}".format(triplet))
 
-    declared_inputs_final = declared_inputs + download_files + [serve_script]
+    user_script_lines = [
+        "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
+        "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
+        # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
+        # its own into the downloads/ cache.
+        "export VCPKG_FORCE_SYSTEM_BINARIES=1",
+        "export VCPKG_BAZEL_ASSET_CACHE=\"$$EXT_BUILD_ROOT$$/{}/asset-cache\"".format(scratch_dir.path),
+    ] + stage_lines + install_cmd_lines
+
+    declared_inputs_final = declared_inputs + download_files + [serve_script] + overlay_inputs
+    if config_file != None:
+        declared_inputs_final = declared_inputs_final + [config_file]
     inputs = InputFiles(
         headers = [],
         include_dirs = [],
@@ -571,6 +614,21 @@ _VCPKG_INSTALL_ATTRS.update({
         allow_files = True,
     ),
     "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
+    "vcpkg_configuration": attr.label(
+        doc = (
+            "Optional vcpkg-configuration.json. Must live in the same Bazel " +
+            "package as `manifest` so vcpkg auto-loads it from the manifest dir."
+        ),
+        allow_single_file = True,
+    ),
+    "overlay_ports": attr.label_list(
+        doc = "Directories passed to vcpkg as --overlay-ports.",
+        allow_files = True,
+    ),
+    "overlay_triplets": attr.label_list(
+        doc = "Directories passed to vcpkg as --overlay-triplets.",
+        allow_files = True,
+    ),
     "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
     "root_file": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
     "triplet": attr.label(

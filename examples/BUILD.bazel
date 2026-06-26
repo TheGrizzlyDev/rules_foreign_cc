@@ -4,6 +4,7 @@ exports_files([
     "cc_wrapper.sh",
     "vcpkg.json",
     "vcpkg.bzlmod.lock",
+    "vcpkg-configuration.json",
 ])
 
 test_suite(

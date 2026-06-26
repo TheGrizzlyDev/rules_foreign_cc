@@ -162,6 +162,7 @@ vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
 vcpkg.source(
     name = "vcpkg_deps",
     manifest = "//:vcpkg.json",
+    vcpkg_configuration = "//:vcpkg-configuration.json",
 )
 
 # `out_static_libs = ["bz2"]` here is redundant with the built-in default

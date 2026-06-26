@@ -60,6 +60,27 @@ tools = module_extension(
     },
 )
 
+def _watch_tree(ctx, path):
+    """Recursively `ctx.watch` every file under `path` so changes inside an
+    overlay invalidate the calling repo or module extension. `path` must be
+    a `path` object (from `ctx.path(...)`). Non-existent paths are a no-op.
+    """
+    if not path.exists:
+        return
+    if not path.is_dir:
+        ctx.watch(path)
+        return
+    stack = [path]
+    for _ in range(1 << 30):  # bounded loop (Starlark has no while)
+        if not stack:
+            break
+        cur = stack.pop()
+        for entry in cur.readdir():
+            if entry.is_dir:
+                stack.append(entry)
+            else:
+                ctx.watch(entry)
+
 # Capture script invoked by vcpkg's x-script asset source. vcpkg passes
 # {sha512} {url} {dst} positional args. We append `<sha512>\t<integrity>\t<url>`
 # (integrity = SRI-style base64-encoded sha512) to $VCPKG_BAZEL_CAPTURE_LOG
@@ -92,24 +113,50 @@ def _vcpkg_capture_repo_impl(repo_ctx):
     # assets, not just its label identity.
     repo_ctx.watch(manifest_path)
     manifest_dir = manifest_path.dirname
+
+    # Watch the configuration file (vcpkg auto-loads it from the manifest
+    # dir, so we just need to make sure it's tracked for refetch).
+    if repo_ctx.attr.vcpkg_configuration:
+        config_path = repo_ctx.path(repo_ctx.attr.vcpkg_configuration)
+        repo_ctx.watch(config_path)
+        if config_path.dirname != manifest_dir:
+            fail(
+                "vcpkg: vcpkg_configuration ({}) must live in the same " +
+                "directory as manifest ({}) so vcpkg can auto-load it.".format(
+                    config_path,
+                    manifest_path,
+                ),
+            )
+
+    overlay_ports_paths = [repo_ctx.path(lbl) for lbl in repo_ctx.attr.overlay_ports]
+    overlay_triplets_paths = [repo_ctx.path(lbl) for lbl in repo_ctx.attr.overlay_triplets]
+    for p in overlay_ports_paths + overlay_triplets_paths:
+        _watch_tree(repo_ctx, p)
+
     triplet = repo_ctx.attr.triplet
     log_file = repo_ctx.path("_capture.log")
     scratch = repo_ctx.path("_scratch")
 
+    cmd = [
+        str(vcpkg_exe),
+        "install",
+        "--only-downloads",
+        "--keep-going",
+        "--x-manifest-root={}".format(manifest_dir),
+        "--triplet={}".format(triplet),
+        "--x-install-root={}/installed".format(scratch),
+        "--x-buildtrees-root={}/buildtrees".format(scratch),
+        "--x-packages-root={}/packages".format(scratch),
+        "--downloads-root={}/downloads".format(scratch),
+        "--x-asset-sources=x-block-origin;x-script,{} {{sha512}} {{url}} {{dst}}".format(capture_script),
+    ]
+    for p in overlay_ports_paths:
+        cmd.append("--overlay-ports={}".format(p))
+    for p in overlay_triplets_paths:
+        cmd.append("--overlay-triplets={}".format(p))
+
     result = repo_ctx.execute(
-        [
-            str(vcpkg_exe),
-            "install",
-            "--only-downloads",
-            "--keep-going",
-            "--x-manifest-root={}".format(manifest_dir),
-            "--triplet={}".format(triplet),
-            "--x-install-root={}/installed".format(scratch),
-            "--x-buildtrees-root={}/buildtrees".format(scratch),
-            "--x-packages-root={}/packages".format(scratch),
-            "--downloads-root={}/downloads".format(scratch),
-            "--x-asset-sources=x-block-origin;x-script,{} {{sha512}} {{url}} {{dst}}".format(capture_script),
-        ],
+        cmd,
         environment = {
             "VCPKG_ROOT": str(vcpkg_root_path),
             "VCPKG_BAZEL_CAPTURE_LOG": str(log_file),
@@ -166,6 +213,9 @@ _vcpkg_capture_repo = repository_rule(
     implementation = _vcpkg_capture_repo_impl,
     attrs = {
         "manifest": attr.label(mandatory = True, allow_single_file = True),
+        "vcpkg_configuration": attr.label(allow_single_file = True),
+        "overlay_ports": attr.label_list(allow_files = True),
+        "overlay_triplets": attr.label_list(allow_files = True),
         "triplet": attr.string(mandatory = True),
         "vcpkg_root_marker": attr.label(mandatory = True, allow_single_file = True),
     },
@@ -372,6 +422,8 @@ def _vcpkg_repo_impl(repo_ctx):
     ]
 
     downloads_by_triplet = json.decode(repo_ctx.attr.downloads_by_triplet_json)
+    overlay_ports_labels = json.decode(repo_ctx.attr.overlay_ports_labels_json)
+    overlay_triplets_labels = json.decode(repo_ctx.attr.overlay_triplets_labels_json)
     install_block = [
         "vcpkg_install(",
         "    name = \"{}\",".format(vcpkg_install_target_name),
@@ -381,6 +433,18 @@ def _vcpkg_repo_impl(repo_ctx):
         "    home = \":{}_home\",".format(vcpkg_install_target_name),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
+    if repo_ctx.attr.vcpkg_configuration_label:
+        install_block.append("    vcpkg_configuration = \"{}\",".format(repo_ctx.attr.vcpkg_configuration_label))
+    if overlay_ports_labels:
+        install_block.append("    overlay_ports = [")
+        for lbl in overlay_ports_labels:
+            install_block.append("        \"{}\",".format(lbl))
+        install_block.append("    ],")
+    if overlay_triplets_labels:
+        install_block.append("    overlay_triplets = [")
+        for lbl in overlay_triplets_labels:
+            install_block.append("        \"{}\",".format(lbl))
+        install_block.append("    ],")
     if downloads_by_triplet:
         install_block.append("    downloads_by_triplet = {")
         for t in sorted(downloads_by_triplet.keys()):
@@ -444,7 +508,20 @@ def _vcpkg_repo_impl(repo_ctx):
 vcpkg_repo = repository_rule(
     implementation = _vcpkg_repo_impl,
     attrs = {
-        "manifest": attr.label(allow_single_file=True), # TODO(TheGrizzlyDev): add doc
+        "manifest": attr.label(allow_single_file = True),
+        "vcpkg_configuration_label": attr.string(
+            default = "",
+            doc = "Stringified label of the user's vcpkg-configuration.json " +
+                  "(if any), passed through to the generated vcpkg_install.",
+        ),
+        "overlay_ports_labels_json": attr.string(
+            default = "[]",
+            doc = "JSON-encoded list of stringified labels for overlay-port dirs.",
+        ),
+        "overlay_triplets_labels_json": attr.string(
+            default = "[]",
+            doc = "JSON-encoded list of stringified labels for overlay-triplet dirs.",
+        ),
         "overrides_json": attr.string(
             default = "[]",
             doc = "JSON-encoded list of per-package override dicts. See vcpkg.package_override.",
@@ -457,7 +534,7 @@ vcpkg_repo = repository_rule(
             default = "{}",
             doc = "JSON-encoded {triplet: capture_repo_label} for vcpkg's asset cache (one filegroup label per triplet pointing at the @vcpkg_downloads_*//all target).",
         ),
-        "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
+        "vcpkg_root": attr.string(mandatory = True),
         "vcpkg_root_marker": attr.label(
             mandatory = True,
             allow_single_file = True,
@@ -478,8 +555,32 @@ vcpkg_root_http_archive = tag_class(attrs = {
 
 vcpkg_source = tag_class(attrs = {
     "name": attr.string(doc = "The name of the workspace generated"),
-    "manifest": attr.label(default = "@__main__//:vcpkg.json", allow_single_file=True), # TODO(TheGrizzlyDev): add doc
-    "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME) # TODO(TheGrizzlyDev): add doc
+    "manifest": attr.label(default = "@__main__//:vcpkg.json", allow_single_file = True),
+    "vcpkg_configuration": attr.label(
+        doc = (
+            "Optional vcpkg-configuration.json. Must live in the same Bazel " +
+            "package as `manifest` so vcpkg can auto-load it via " +
+            "--x-manifest-root."
+        ),
+        allow_single_file = True,
+    ),
+    "overlay_ports": attr.label_list(
+        doc = (
+            "Overlay-port directories passed to vcpkg via --overlay-ports. " +
+            "Each label should resolve to a directory (e.g. a " +
+            "`bazel_skylib` `directory` target or a filegroup with " +
+            "`allow_empty = False`)."
+        ),
+        allow_files = True,
+    ),
+    "overlay_triplets": attr.label_list(
+        doc = (
+            "Overlay-triplet directories passed to vcpkg via " +
+            "--overlay-triplets. Same shape constraints as `overlay_ports`."
+        ),
+        allow_files = True,
+    ),
+    "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME),
 })
 
 # TODO(TheGrizzlyDev): add doc — per-package output overrides spliced onto the
@@ -702,6 +803,9 @@ def _vcpkg_mod(module_ctx):
                 _vcpkg_capture_repo(
                     name = capture_repo,
                     manifest = source.manifest,
+                    vcpkg_configuration = source.vcpkg_configuration,
+                    overlay_ports = source.overlay_ports,
+                    overlay_triplets = source.overlay_triplets,
                     triplet = triplet,
                     vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
                 )
@@ -710,6 +814,9 @@ def _vcpkg_mod(module_ctx):
             vcpkg_repo(
                 name = source.name,
                 manifest = source.manifest,
+                vcpkg_configuration_label = str(source.vcpkg_configuration) if source.vcpkg_configuration else "",
+                overlay_ports_labels_json = json.encode([str(l) for l in source.overlay_ports]),
+                overlay_triplets_labels_json = json.encode([str(l) for l in source.overlay_triplets]),
                 vcpkg_root = vcpkg_repo_name(source.root),
                 vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
                 overrides_json = json.encode(applicable),
@@ -718,7 +825,6 @@ def _vcpkg_mod(module_ctx):
             )
     return None
 
-# TODO(TheGrizzlyDev): add support for the configuration file: https://learn.microsoft.com/en-us/vcpkg/reference/vcpkg-configuration-json
 # TODO(TheGrizzlyDev): automatically use the right triplet for a given platform
 vcpkg = module_extension(
     implementation = _vcpkg_mod,
