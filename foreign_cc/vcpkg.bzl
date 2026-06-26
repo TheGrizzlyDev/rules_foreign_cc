@@ -327,6 +327,10 @@ def _vcpkg_install_impl(ctx):
 
     triplet = _resolve_triplet(ctx)
 
+    # TODO(TheGrizzlyDev): support --overlay-ports and --overlay-triplets, with
+    # the directories staged into the install action's sandbox. Triplets
+    # discovered via overlay_triplets should also be valid keys for
+    # vcpkg.triplet_mapping.
     user_script_lines = [
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}\"".format(home_path),
         "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
@@ -366,6 +370,10 @@ _VCPKG_INSTALL_ATTRS.update({
         cfg = "target",
         default = [],
     ),
+    # TODO(TheGrizzlyDev): move this directory inside the rule so callers
+    # don't have to know it exists. Today the generated repo emits a separate
+    # `directory(name = "install_tree_home", srcs = [])` target and wires it
+    # in via this attr — the indirection is load-bearing but not obvious.
     "home": attr.label(
         doc = "A `bazel_skylib` `directory` target used as $HOME for the vcpkg invocation.",
         mandatory = True,

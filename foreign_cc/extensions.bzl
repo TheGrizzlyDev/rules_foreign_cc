@@ -77,6 +77,11 @@ def _vcpkg_repo_impl(repo_ctx):
     manifest_path = repo_ctx.path(repo_ctx.attr.manifest)
     manifest = json.decode(repo_ctx.read(manifest_path))
     packages = []
+    # TODO(TheGrizzlyDev): handle object-form dependency entries beyond their
+    # `name` — `features`, `default-features`, and version constraints are
+    # currently dropped silently.
+    # TODO(TheGrizzlyDev): handle the manifest's `builtin-baseline`. Today
+    # it's ignored.
     for dep in manifest.get("dependencies", []):
         if type(dep) == "string":
             packages.append(dep)
@@ -160,6 +165,14 @@ def _vcpkg_repo_impl(repo_ctx):
         ")",
         "",
     ]
+    # TODO(TheGrizzlyDev): wire vcpkg_export.deps from the override schema so
+    # link order between packages (e.g. openssl: ssl -> crypto) is correct.
+    # TODO(TheGrizzlyDev): auto-derive vcpkg_export.deps by running
+    # `vcpkg depend-info <pkg> --format=tree` from _vcpkg_mod and parsing the
+    # resolved dep graph; user-declared deps in the override schema still win.
+    # TODO(TheGrizzlyDev): surface tools/* binaries when the override schema's
+    # `out_binaries` field is populated. Today tools/* is unconditionally
+    # filtered out by the export script.
     for pkg in packages:
         block = [
             "vcpkg_export(",
@@ -247,6 +260,16 @@ vcpkg_triplet_mapping = tag_class(attrs = {
     ),
 })
 
+# TODO(TheGrizzlyDev): ship a built-in default registry of well-known
+# package_overrides (boost-*, openssl, qt, abseil, protobuf, grpc, ...) so
+# common packages work out of the box. User-declared overrides shadow the
+# defaults on the matching (package, triplet, compilation_mode) cell, same
+# rule as triplet_mapping.
+# TODO(TheGrizzlyDev): support `{triplet}`, `{package}`, `{version}`
+# placeholders inside override string values so a single universal override
+# (e.g. `out_static_libs = ["{package}d"]` for compilation_mode = "dbg")
+# covers patterns like vcpkg's debug-suffix convention without enumerating
+# per package.
 vcpkg_package_override = tag_class(attrs = {
     "source": attr.string(
         doc = "The name of the vcpkg.source repo these overrides apply to.",
@@ -289,15 +312,19 @@ filegroup(
 
 def _vcpkg_mod(module_ctx):
     default_root_configured = False
-    
+
     vcpkg_repo_name = lambda name: "vcpkg_root_%s" % (name)
-    
+
+    # TODO(TheGrizzlyDev): pin the root per vcpkg.source. Today repeated tags
+    # with the same `name` silently produce an http_archive collision, and
+    # vcpkg.source has no way to scope a root to itself. Either fail loud on
+    # duplicates or thread an explicit root selection through each source.
     for mod in module_ctx.modules:
         for root_tag in mod.tags.vcpkg_root_http_archive:
             name = root_tag.name
             if name == DEFAULT_VCPKG_ROOT_WORKSPACE_NAME:
                 default_root_configured = True
-            
+
             http_archive(
                 name = vcpkg_repo_name(name),
                 urls = root_tag.urls,
