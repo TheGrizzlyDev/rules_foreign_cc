@@ -100,10 +100,66 @@ def _vcpkg_repo_impl(repo_ctx):
     for ov in json.decode(repo_ctx.attr.overrides_json):
         overrides_by_pkg[ov["package"]] = ov
 
+    triplet_mappings = json.decode(repo_ctx.attr.triplet_mappings_json)
+
+    # Emit one config_setting per unique constraint set. Two mappings that
+    # share a constraint set but resolve to different triplets are an
+    # ambiguity the user must resolve — fail eagerly with the list.
+    config_setting_for = {}  # constraint-set tuple -> config_setting name
+    triplet_for_key = {}     # constraint-set tuple -> triplet name (for dup check)
+    config_setting_blocks = []
+    triplet_select = {}
+    triplet_select_keys = []  # preserve insertion order for stable BUILD
+    for tm in triplet_mappings:
+        key = tuple(tm["constraints"])
+        if key in triplet_for_key:
+            if triplet_for_key[key] != tm["triplet"]:
+                fail(
+                    "vcpkg: multiple triplet_mapping tags share constraints " +
+                    "{} but resolve to different triplets: {} and {}.".format(
+                        list(key),
+                        triplet_for_key[key],
+                        tm["triplet"],
+                    ),
+                )
+            continue
+        triplet_for_key[key] = tm["triplet"]
+        name = "_triplet_mapping_{}".format(len(config_setting_for))
+        config_setting_for[key] = name
+        config_setting_blocks += [
+            "config_setting(",
+            "    name = \"{}\",".format(name),
+            "    constraint_values = [",
+        ] + [
+            "        \"{}\",".format(c) for c in tm["constraints"]
+        ] + [
+            "    ],",
+            ")",
+            "",
+        ]
+        label = ":" + name
+        triplet_select_keys.append(label)
+        triplet_select[label] = tm["triplet"]
+
+    triplet_info_target = "vcpkg_triplet_info"
+    triplet_info_blocks = [
+        "vcpkg_triplet_info_from_mappings(",
+        "    name = \"{}\",".format(triplet_info_target),
+        "    mapping = {",
+    ] + [
+        "        \"{}\": \"{}\",".format(label, triplet_select[label]) for label in triplet_select_keys
+    ] + [
+        "    },",
+        ")",
+        "",
+    ]
+
     lines = [
         "load(\"@bazel_skylib//rules/directory:directory.bzl\", \"directory\")",
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
+        "load(\"@rules_foreign_cc//foreign_cc/private/framework:platform.bzl\", \"vcpkg_triplet_info_from_mappings\")",
         "",
+    ] + config_setting_blocks + triplet_info_blocks + [
         "directory(",
         "    name = \"{}_home\",".format(vcpkg_install_target_name),
         "    srcs = [],",
@@ -115,6 +171,7 @@ def _vcpkg_repo_impl(repo_ctx):
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
         "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
         "    home = \":{}_home\",".format(vcpkg_install_target_name),
+        "    triplet = \":{}\",".format(triplet_info_target),
         ")",
         "",
     ]
@@ -124,6 +181,7 @@ def _vcpkg_repo_impl(repo_ctx):
             "    name = \"{}\",".format(pkg),
             "    install_tree = \":{}\",".format(vcpkg_install_target_name),
             "    package = \"{}\",".format(pkg),
+            "    triplet = \":{}\",".format(triplet_info_target),
         ]
 
         ov = overrides_by_pkg.get(pkg)
@@ -155,6 +213,10 @@ vcpkg_repo = repository_rule(
             default = "[]",
             doc = "JSON-encoded list of per-package override dicts. See vcpkg.package_override.",
         ),
+        "triplet_mappings_json": attr.string(
+            default = "[]",
+            doc = "JSON-encoded list of {constraints, triplet} dicts. See vcpkg.triplet_mapping.",
+        ),
         "vcpkg_root": attr.string(mandatory = True), # TODO(TheGrizzlyDev): add doc
     }
 )
@@ -178,6 +240,36 @@ vcpkg_source = tag_class(attrs = {
 # generated vcpkg_export(...) calls. Mirrors the out_* attrs on vcpkg_export.
 # Each tag carries content for a single triplet (or "" == all triplets). Tags
 # for the same (source, package) merge into per-triplet dicts.
+# Built-in triplet mappings shipped with rules_foreign_cc. A default mapping is
+# dropped if any user mapping's constraint set is a superset of (or equal to)
+# the default's set — so a user can shadow `[cpu:x86_64, os:windows] →
+# x64-windows` with their own mapping for the same cell, while a strictly
+# more-specific user mapping coexists with the default.
+_DEFAULT_TRIPLET_MAPPINGS = [
+    {"constraints": ["@platforms//cpu:x86_64",  "@platforms//os:linux"],   "triplet": "x64-linux"},
+    {"constraints": ["@platforms//cpu:aarch64", "@platforms//os:linux"],   "triplet": "arm64-linux"},
+    {"constraints": ["@platforms//cpu:x86_64",  "@platforms//os:macos"],   "triplet": "x64-osx"},
+    {"constraints": ["@platforms//cpu:aarch64", "@platforms//os:macos"],   "triplet": "arm64-osx"},
+    {"constraints": ["@platforms//cpu:x86_64",  "@platforms//os:windows"], "triplet": "x64-windows"},
+    {"constraints": ["@platforms//cpu:x86_32",  "@platforms//os:windows"], "triplet": "x86-windows"},
+    {"constraints": ["@platforms//cpu:aarch64", "@platforms//os:windows"], "triplet": "arm64-windows"},
+]
+
+# User-declared triplet mapping. Materialized as a config_setting in the
+# generated @vcpkg_deps repo and woven into the single select() that drives
+# the per-source vcpkg_triplet_info target.
+vcpkg_triplet_mapping = tag_class(attrs = {
+    "constraints": attr.label_list(
+        doc = "Constraint value labels (e.g. @platforms//os:linux). Materialized " +
+              "as the config_setting's constraint_values list.",
+        mandatory = True,
+    ),
+    "triplet": attr.string(
+        doc = "vcpkg triplet name to resolve to when all `constraints` hold.",
+        mandatory = True,
+    ),
+})
+
 vcpkg_package_override = tag_class(attrs = {
     "source": attr.string(
         doc = "The name of the vcpkg.source repo these overrides apply to.",
@@ -259,6 +351,37 @@ def _vcpkg_mod(module_ctx):
             if ov.out_headers_only:
                 entry["out_headers_only"] = True
 
+    # Collect user-declared triplet mappings globally (across modules).
+    # Stringifying a Label yields the canonical apparent-repo form
+    # (e.g. "@@platforms//os:macos"), so we use that consistently on both
+    # the user and default paths to make subset comparisons reliable.
+    user_mappings = []
+    for mod in module_ctx.modules:
+        for tm in mod.tags.triplet_mapping:
+            user_mappings.append({
+                "constraints": sorted([str(c) for c in tm.constraints]),
+                "triplet": tm.triplet,
+            })
+
+    # Drop built-in defaults whose constraint set is a (non-strict) subset of
+    # any user mapping's constraint set. That's the "user wins on the same
+    # cell" rule. More-specific user mappings (strict supersets) leave the
+    # default in place; select()'s most-specific-wins handles them at analysis.
+    user_constraint_sets = [{c: True for c in um["constraints"]} for um in user_mappings]
+    default_mappings = []
+    for dm in _DEFAULT_TRIPLET_MAPPINGS:
+        canonical = sorted([str(Label(c)) for c in dm["constraints"]])
+        dm_set = {c: True for c in canonical}
+        shadowed = False
+        for us in user_constraint_sets:
+            if all([c in us for c in dm_set]):
+                shadowed = True
+                break
+        if not shadowed:
+            default_mappings.append({"constraints": canonical, "triplet": dm["triplet"]})
+
+    triplet_mappings = user_mappings + default_mappings
+
     for mod in module_ctx.modules:
         for source in mod.tags.source:
             applicable = []
@@ -271,6 +394,7 @@ def _vcpkg_mod(module_ctx):
                 manifest = source.manifest,
                 vcpkg_root = vcpkg_repo_name(source.root),
                 overrides_json = json.encode(applicable),
+                triplet_mappings_json = json.encode(triplet_mappings),
             )
     return None
 
@@ -282,5 +406,6 @@ vcpkg = module_extension(
         "vcpkg_root_http_archive": vcpkg_root_http_archive,
         "source": vcpkg_source,
         "package_override": vcpkg_package_override,
+        "triplet_mapping": vcpkg_triplet_mapping,
     }
 )

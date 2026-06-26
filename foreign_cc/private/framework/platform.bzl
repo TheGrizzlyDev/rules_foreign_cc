@@ -225,6 +225,53 @@ def vcpkg_triplet_info(name = "vcpkg_triplet_info"):
         visibility = ["//visibility:public"],
     )
 
+def _vcpkg_triplet_info_from_mappings_impl(ctx):
+    if not ctx.attr.triplet:
+        fail(
+            "vcpkg: no triplet_mapping matches the active Bazel platform. " +
+            "Add a vcpkg.triplet_mapping(constraints = [...], triplet = \"...\") " +
+            "tag to MODULE.bazel. Known triplets declared so far: {}".format(
+                sorted(ctx.attr.known_triplets),
+            ),
+        )
+    return [VcpkgTripletInfo(triplet = ctx.attr.triplet)]
+
+_vcpkg_triplet_info_from_mappings = rule(
+    doc = "Resolves a vcpkg triplet from a {config_setting: triplet} mapping.",
+    implementation = _vcpkg_triplet_info_from_mappings_impl,
+    attrs = {
+        "triplet": attr.string(
+            doc = "Resolved triplet name. Populated by select() in the macro; " +
+                  "empty string means 'no mapping matched the active platform'.",
+        ),
+        "known_triplets": attr.string_list(
+            doc = "All triplet names declared in the mapping. Used only for the " +
+                  "fallback error message.",
+        ),
+    },
+    provides = [VcpkgTripletInfo],
+)
+
+def vcpkg_triplet_info_from_mappings(name, mapping):
+    """Defines a target whose VcpkgTripletInfo is resolved from a
+    {config_setting_label: triplet_name} mapping via a single select().
+
+    The default branch returns "" so the rule impl can fail with a built-in
+    diagnostic listing the known triplets.
+
+    Args:
+      name: A unique name for this target.
+      mapping: dict of config_setting label -> vcpkg triplet name.
+    """
+    select_dict = dict(mapping)
+    select_dict["//conditions:default"] = ""
+    _vcpkg_triplet_info_from_mappings(
+        name = name,
+        triplet = select(select_dict),
+        known_triplets = sorted({v: None for v in mapping.values()}.keys()),
+        visibility = ["//visibility:public"],
+    )
+
 def triplet_name(os, arch):
     """A helper function for getting the platform triplet from the results of the above arch/os functions
 
