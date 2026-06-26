@@ -145,12 +145,10 @@ def _vcpkg_export_impl(ctx):
     #   1. out_headers_only=True -> no -l flags at all.
     #   2. Any of out_static_libs/out_shared_libs/out_interface_libs set for
     #      the active triplet (or under the "" fallback key) -> use them.
-    #   3. Fallback: guess [package] as the single -l<package> name.
-    # TODO(TheGrizzlyDev): when an override is absent, derive the names from
-    # the package `.list` file via map_directory; the [package] heuristic in
-    # branch 3 is the last-resort default until that lands. The explicit
-    # out_* attrs (typically set via vcpkg.package_override in MODULE.bazel)
-    # remain as the manual escape hatch even after map_directory ships.
+    #   3. Fallback: guess [package] as the single -l<package> name. The
+    #      [package] heuristic only matches single-lib packages whose lib
+    #      basename equals the package name; everything else requires an
+    #      explicit vcpkg.package_override in MODULE.bazel.
     if ctx.attr.out_headers_only:
         link_flags = []
     else:
