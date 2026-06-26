@@ -5,3 +5,20 @@ cc_binary(
     srcs = ["main.cpp"],
     deps = ["@vcpkg_overlay_deps//:bazel-test"],
 )
+
+# The `greet` shell script shipped by the overlay port (declared via
+# vcpkg.package_override(out_binaries = ["greet"]) in MODULE.bazel) is
+# exposed as an output group named after its basename. Mirrors how
+# cc_external_rule_impl surfaces binaries.
+filegroup(
+    name = "greet",
+    srcs = ["@vcpkg_overlay_deps//:bazel-test"],
+    output_group = "greet",
+)
+
+genrule(
+    name = "greeting",
+    outs = ["greeting.txt"],
+    tools = [":greet"],
+    cmd = "$(execpath :greet) > $@",
+)

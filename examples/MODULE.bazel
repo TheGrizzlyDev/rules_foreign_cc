@@ -190,6 +190,7 @@ vcpkg.package_override(
     source = "vcpkg_overlay_deps",
     package = "bazel-test",
     out_headers_only = True,
+    out_binaries = ["greet"],
 )
 
 use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps")

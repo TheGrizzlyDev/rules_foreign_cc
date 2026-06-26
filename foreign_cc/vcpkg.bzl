@@ -249,8 +249,9 @@ mkdir -p "$export_dir"
 # inside the export tree. Returns the destination relative path on stdout, or
 # empty if the entry should be skipped.
 # vcpkg layout: include/* (release-only), lib/*, bin/* (Windows DLLs),
-# share/*, lib/pkgconfig/*, debug/lib/*, debug/bin/*, debug/share/* (rare).
-# Headers are not duplicated under debug/.
+# share/*, lib/pkgconfig/*, tools/<port>/* (port-shipped binaries),
+# debug/lib/*, debug/bin/*, debug/share/* (rare). Headers are not duplicated
+# under debug/.
 classify() {
   local rel="$1"
   if [ "$debug" = "1" ]; then
@@ -263,11 +264,12 @@ classify() {
       # them only under <triplet>/share/<pkg>/; vcpkg's own debug-vs-release
       # split happens at the lib/binary level, not at the cmake-package level.
       share/*) printf '%s' "$rel" ;;
+      tools/*) printf '%s' "$rel" ;;
       *) printf '' ;;
     esac
   else
     case "$rel" in
-      include/*|lib/*|bin/*|share/*) printf '%s' "$rel" ;;
+      include/*|lib/*|bin/*|share/*|tools/*) printf '%s' "$rel" ;;
       *) printf '' ;;
     esac
   fi
@@ -285,11 +287,6 @@ while IFS= read -r line || [ -n "$line" ]; do
   # Skip directory entries (vcpkg lists them with a trailing slash).
   case "$rel" in
     */) continue ;;
-  esac
-
-  # Tool binaries are never part of CcInfo; skip in either mode.
-  case "$rel" in
-    tools/*) continue ;;
   esac
 
   dst="$(classify "$rel")"
@@ -374,6 +371,7 @@ def _vcpkg_export_impl(ctx):
     static_files = []
     shared_files = []
     interface_files = []
+    binary_files = []
     extra_runfiles = []
     if override.get("out_headers_only"):
         pass
@@ -408,6 +406,26 @@ def _vcpkg_export_impl(ctx):
                 interface_files.append(_extract_lib_file(ctx, export_dir, "lib", name + ".lib"))
         for name in explicit_interface:
             interface_files.append(_extract_lib_file(ctx, export_dir, "lib", _static_basename(name, is_windows)))
+
+    # Binaries: vcpkg installs them under <triplet>/tools/<port>/<binary>.
+    # On Windows the binary basename gains `.exe`.
+    for name in override.get("out_binaries", []):
+        basename = name + ".exe" if is_windows else name
+        out = ctx.actions.declare_file(
+            "{}/bin/{}".format(ctx.attr.name, basename),
+        )
+        ctx.actions.run_shell(
+            inputs = [export_dir],
+            outputs = [out],
+            command = "cp \"$1\" \"$2\" && chmod +x \"$2\"",
+            arguments = [
+                "{}/tools/{}/{}".format(export_dir.path, ctx.attr.package, basename),
+                out.path,
+            ],
+            mnemonic = "VcpkgExtractBin",
+            progress_message = "vcpkg_export: extracting tools/{}/{}".format(ctx.attr.package, basename),
+        )
+        binary_files.append(out)
 
     # `defines` come from two sources: the rule attr (substituted here) and
     # the matched override entry (already substituted inside _resolve_override).
@@ -453,15 +471,26 @@ def _vcpkg_export_impl(ctx):
         if ForeignCcDepsInfo in dep:
             transitive_artifacts.append(dep[ForeignCcDepsInfo].artifacts)
 
-    # Propagate shared libraries as runfiles so consuming cc_binary/cc_test
-    # can find the .so/.dylib/.dll at runtime. cc_common already wires
-    # dynamic_library into linker_input; the runfiles cover the loader.
-    runfiles = ctx.runfiles(files = extra_runfiles)
+    # Propagate shared libraries (and any declared binaries) as runfiles so
+    # consuming cc_binary/cc_test can find the .so/.dylib/.dll at runtime.
+    # cc_common already wires dynamic_library into linker_input; the runfiles
+    # cover the loader.
+    runfiles = ctx.runfiles(files = extra_runfiles + binary_files)
     for dep in ctx.attr.deps:
         runfiles = runfiles.merge(dep[DefaultInfo].default_runfiles)
 
+    # Default files: the export tree itself for "I want everything", plus
+    # each declared binary so `bazel build :pkg` materializes them and
+    # downstream `tools = [...]` consumers can address them directly.
+    default_files = [export_dir] + binary_files
+
+    # Per-basename output group so consumers can address one binary at a time
+    # via `--output_groups=<basename>` (mirrors cc_external_rule_impl).
+    output_groups = {f.basename: depset([f]) for f in binary_files}
+
     return [
-        DefaultInfo(files = depset([export_dir]), runfiles = runfiles),
+        DefaultInfo(files = depset(default_files), runfiles = runfiles),
+        OutputGroupInfo(**output_groups),
         merged,
         ForeignCcDepsInfo(artifacts = depset(
             direct = [own_artifact],

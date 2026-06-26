@@ -225,8 +225,8 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "3lafnM0u4UkCzf6zrBu3rnPktU7OeG805vuZNPlYM3U=",
-        "usagesDigest": "23/vUjerfX5Ftg0eC49JOrQQsbm0Ph9Dd54T6f28z3U=",
+        "bzlTransitiveDigest": "4iyPf6Db1spDuKcxbC1YB98zddPwtAFnWKzNMQmGeQs=",
+        "usagesDigest": "xr3TGomiWAMQPV7OeBtyNBM8YX/bjJ5XeRirEoVabDI=",
         "recordedFileInputs": {},
         "recordedDirentsInputs": {},
         "envVariables": {},
@@ -427,7 +427,7 @@
               "overlay_triplets": [],
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
-              "overrides_json": "{\"bazel-test\":{\"entries\":[{\"out_headers_only\":true}]},\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
+              "overrides_json": "{\"bazel-test\":{\"entries\":[{\"out_binaries\":[\"greet\"],\"out_headers_only\":true}]},\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
               "triplet_mappings_json": "[{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:linux\"],\"triplet\":\"x64-linux\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:linux\"],\"triplet\":\"arm64-linux\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:macos\"],\"triplet\":\"x64-osx\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:macos\"],\"triplet\":\"arm64-osx\"},{\"constraints\":[\"@@platforms//cpu:x86_64\",\"@@platforms//os:windows\"],\"triplet\":\"x64-windows\"},{\"constraints\":[\"@@platforms//cpu:x86_32\",\"@@platforms//os:windows\"],\"triplet\":\"x86-windows\"},{\"constraints\":[\"@@platforms//cpu:aarch64\",\"@@platforms//os:windows\"],\"triplet\":\"arm64-windows\"}]",
               "downloads_by_triplet_json": "{\"arm64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_linux//:all\",\"arm64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_osx//:all\",\"arm64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_arm64_windows//:all\",\"x64-linux\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_linux//:all\",\"x64-osx\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_osx//:all\",\"x64-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x64_windows//:all\",\"x86-windows\":\"@vcpkg_downloads_vcpkg_overlay_deps_x86_windows//:all\"}"
             }
