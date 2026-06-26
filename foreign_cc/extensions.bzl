@@ -239,9 +239,6 @@ def _vcpkg_repo_impl(repo_ctx):
     repo_ctx.watch(manifest_path)
     manifest = json.decode(repo_ctx.read(manifest_path))
     packages = []
-    # TODO(TheGrizzlyDev): handle object-form dependency entries beyond their
-    # `name` — `features`, `default-features`, and version constraints are
-    # currently dropped silently.
     # TODO(TheGrizzlyDev): handle the manifest's `builtin-baseline`. Today
     # it's ignored.
     for dep in manifest.get("dependencies", []):
