@@ -25,17 +25,48 @@ def _resolve_triplet(ctx):
         )
     return triplet
 
-def _resolve_per_triplet(d, triplet):
-    """Look up a per-triplet entry from an attr.string_list_dict.
+_OVERRIDE_PAYLOAD_FIELDS = (
+    "out_static_libs",
+    "out_shared_libs",
+    "out_interface_libs",
+    "out_binaries",
+    "out_headers_only",
+)
 
-    Exact-match key wins; the empty key "" is the fallback applied when no
-    triplet-specific entry exists. Returns [] if neither is present.
+def _resolve_override(override_json, triplet, compilation_mode):
+    """Pick the most-specific override entry for (triplet, compilation_mode).
+
+    An entry's optional `triplet` / `compilation_mode` fields scope its
+    applicability. An entry matches when each scoping field is either absent
+    in the entry or equal to the active value. The "most specific" match —
+    the one with the most scoping fields present — wins. Ties are resolved
+    by entry order (earlier wins) so the JSON's order is meaningful.
+
+    Returns a dict containing only the _OVERRIDE_PAYLOAD_FIELDS keys present
+    in the picked entry; if no entry matches, returns {}.
     """
-    if triplet in d:
-        return d[triplet]
-    if "" in d:
-        return d[""]
-    return []
+    if not override_json:
+        return {}
+    parsed = json.decode(override_json)
+    entries = parsed.get("entries", [])
+
+    best = None
+    best_specificity = -1
+    for entry in entries:
+        entry_triplet = entry.get("triplet")
+        entry_mode = entry.get("compilation_mode")
+        if entry_triplet != None and entry_triplet != triplet:
+            continue
+        if entry_mode != None and entry_mode != compilation_mode:
+            continue
+        specificity = (1 if entry_triplet != None else 0) + (1 if entry_mode != None else 0)
+        if specificity > best_specificity:
+            best = entry
+            best_specificity = specificity
+
+    if best == None:
+        return {}
+    return {k: best[k] for k in _OVERRIDE_PAYLOAD_FIELDS if k in best}
 
 _VCPKG_EXPORT_SCRIPT = r"""#!/usr/bin/env bash
 set -euo pipefail
@@ -45,6 +76,7 @@ export_dir="$2"
 triplet="$3"
 package="$4"
 base_rel="$5"
+debug="$6"  # "1" -> use lib/share/pkgconfig from debug/; "0" -> release
 
 shopt -s nullglob
 list_candidates=("$install_tree/vcpkg/info/${package}_"*"_${triplet}.list")
@@ -55,6 +87,32 @@ fi
 listfile="${list_candidates[0]}"
 
 mkdir -p "$export_dir"
+
+# Decide which install-tree-relative entries are kept, and where they land
+# inside the export tree. Returns the destination relative path on stdout, or
+# empty if the entry should be skipped.
+# vcpkg layout: include/* (release-only), lib/*, share/*, lib/pkgconfig/*,
+# debug/lib/*, debug/share/* (rare). Headers are not duplicated under debug/.
+classify() {
+  local rel="$1"
+  if [ "$debug" = "1" ]; then
+    case "$rel" in
+      include/*) printf '%s' "$rel" ;;
+      debug/lib/*) printf '%s' "${rel#debug/}" ;;
+      debug/share/*) printf '%s' "${rel#debug/}" ;;
+      # Use release-side share/ for CMake config files. Most ports install
+      # them only under <triplet>/share/<pkg>/; vcpkg's own debug-vs-release
+      # split happens at the lib/binary level, not at the cmake-package level.
+      share/*) printf '%s' "$rel" ;;
+      *) printf '' ;;
+    esac
+  else
+    case "$rel" in
+      include/*|lib/*|share/*) printf '%s' "$rel" ;;
+      *) printf '' ;;
+    esac
+  fi
+}
 
 while IFS= read -r line || [ -n "$line" ]; do
   [ -z "$line" ] && continue
@@ -70,32 +128,25 @@ while IFS= read -r line || [ -n "$line" ]; do
     */) continue ;;
   esac
 
-  # Filter: debug builds, tools, shared docs, pkgconfig files.
-  # TODO(TheGrizzlyDev): export share/ — vcpkg writes CMake config files
-  # there (needed once we wire up find_package-style consumption).
-  # TODO(TheGrizzlyDev): export *pkgconfig/* entries for consumers that drive
-  # linkage through pkg-config rather than direct -l flags.
+  # Tool binaries are never part of CcInfo; skip in either mode.
   case "$rel" in
-    debug/*|tools/*|share/*) continue ;;
-    *pkgconfig/*) continue ;;
+    tools/*) continue ;;
   esac
 
-  # Only export include/ and lib/ for the simple version.
+  dst="$(classify "$rel")"
+  [ -z "$dst" ] && continue
+
   # TODO(TheGrizzlyDev): add bin/ for Windows — vcpkg places DLLs there,
   # and the relative-symlink strategy below won't work on Windows either:
   # we'll need junctions or a copy tree.
-  case "$rel" in
-    include/*|lib/*) ;;
-    *) continue ;;
-  esac
 
-  target="$export_dir/$rel"
+  target="$export_dir/$dst"
   mkdir -p "$(dirname "$target")"
 
-  # Relative symlink: depth = (slashes in rel) + 1.
+  # Relative symlink: depth = (slashes in dst) + 1.
   # That many "../" hops from the symlink's directory reach <export_dir>'s
   # parent, from where <base_rel> points at the install_tree.
-  slashes="${rel//[^\/]/}"
+  slashes="${dst//[^\/]/}"
   depth=$((${#slashes} + 1))
   prefix=""
   for ((i=0; i<depth; i++)); do prefix="../$prefix"; done
@@ -126,6 +177,11 @@ def _vcpkg_export_impl(ctx):
         is_executable = True,
     )
 
+    compilation_mode = ctx.attr.compilation_mode or ctx.var["COMPILATION_MODE"]
+    debug = compilation_mode == "dbg"
+
+    override = _resolve_override(ctx.attr.override_json, triplet, compilation_mode)
+
     ctx.actions.run(
         mnemonic = "VcpkgExport",
         executable = script,
@@ -135,27 +191,31 @@ def _vcpkg_export_impl(ctx):
             triplet,
             ctx.attr.package,
             base_rel,
+            "1" if debug else "0",
         ],
         inputs = [install_tree],
         outputs = [export_dir],
-        progress_message = "vcpkg_export: linking {} ({})".format(ctx.attr.package, triplet),
+        progress_message = "vcpkg_export: linking {} ({}{})".format(
+            ctx.attr.package,
+            triplet,
+            ", debug" if debug else "",
+        ),
     )
 
     # Resolution order for link flags:
-    #   1. out_headers_only=True -> no -l flags at all.
-    #   2. Any of out_static_libs/out_shared_libs/out_interface_libs set for
-    #      the active triplet (or under the "" fallback key) -> use them.
+    #   1. override entry says out_headers_only=True -> no -l flags.
+    #   2. override entry lists out_static/shared/interface libs -> use them.
     #   3. Fallback: guess [package] as the single -l<package> name. The
     #      [package] heuristic only matches single-lib packages whose lib
-    #      basename equals the package name; everything else requires an
-    #      explicit vcpkg.package_override in MODULE.bazel.
-    if ctx.attr.out_headers_only:
+    #      basename equals the package name; everything else requires a
+    #      vcpkg.package_override in MODULE.bazel.
+    if override.get("out_headers_only"):
         link_flags = []
     else:
         explicit_libs = (
-            _resolve_per_triplet(ctx.attr.out_static_libs, triplet) +
-            _resolve_per_triplet(ctx.attr.out_shared_libs, triplet) +
-            _resolve_per_triplet(ctx.attr.out_interface_libs, triplet)
+            override.get("out_static_libs", []) +
+            override.get("out_shared_libs", []) +
+            override.get("out_interface_libs", [])
         )
         library_names = explicit_libs if explicit_libs else [ctx.attr.package]
         link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
@@ -189,6 +249,17 @@ def _vcpkg_export_impl(ctx):
 vcpkg_export = rule(
     _vcpkg_export_impl,
     attrs = {
+        "compilation_mode": attr.string(
+            doc = (
+                "Per-target override of Bazel's compilation mode. If unset, " +
+                "the global `--compilation_mode` is used. `dbg` causes the " +
+                "export to source libraries from `<triplet>/debug/lib/` " +
+                "instead of `<triplet>/lib/`; headers still come from " +
+                "`<triplet>/include/`."
+            ),
+            values = ["", "dbg", "opt", "fastbuild"],
+            default = "",
+        ),
         "defines": attr.string_list(
             doc = "Defines propagated to consumers of this package.",
             default = [],
@@ -202,25 +273,17 @@ vcpkg_export = rule(
             doc = "A vcpkg_install target whose install tree contains this package.",
             mandatory = True,
         ),
-        "out_binaries": attr.string_list_dict(
-            doc = "Per-triplet binary basenames (forward-compat; not yet used for CcInfo). Key \"\" applies to all triplets.",
-            default = {},
-        ),
-        "out_headers_only": attr.bool(
-            doc = "If True, no -l flags are emitted (header-only package).",
-            default = False,
-        ),
-        "out_interface_libs": attr.string_list_dict(
-            doc = "Per-triplet interface library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
-            default = {},
-        ),
-        "out_shared_libs": attr.string_list_dict(
-            doc = "Per-triplet shared library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
-            default = {},
-        ),
-        "out_static_libs": attr.string_list_dict(
-            doc = "Per-triplet static library basenames (passed as `-l<name>`). Key \"\" applies to all triplets.",
-            default = {},
+        "override_json": attr.string(
+            doc = (
+                "JSON-encoded override document. Shape: " +
+                "`{\"entries\": [{\"triplet\"?: str, \"compilation_mode\"?: str, " +
+                "\"out_static_libs\"?: [str], \"out_shared_libs\"?: [str], " +
+                "\"out_interface_libs\"?: [str], \"out_binaries\"?: [str], " +
+                "\"out_headers_only\"?: bool}, ...]}`. " +
+                "Entries are scoped by their optional `triplet` and " +
+                "`compilation_mode` fields; the most-specific match wins."
+            ),
+            default = "",
         ),
         "package": attr.string(
             doc = "vcpkg package name to export from the install tree.",

@@ -170,4 +170,18 @@ vcpkg.package_override(
     out_static_libs = ["bz2"],
 )
 
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "bzip2",
+    compilation_mode = "dbg",
+    out_static_libs = ["bz2d"],
+)
+
+vcpkg.package_override(
+    source = "vcpkg_deps",
+    package = "fmt",
+    compilation_mode = "dbg",
+    out_static_libs = ["fmtd"],
+)
+
 use_repo(vcpkg, "vcpkg_deps")

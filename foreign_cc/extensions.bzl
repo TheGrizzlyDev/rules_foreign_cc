@@ -62,27 +62,14 @@ tools = module_extension(
 # TODO(TheGrizzlyDev): split the code below
 # TODO(TheGrizzlyDev): install vcpkg, patchelf hermetically
 # TODO(TheGrizzlyDev): add doc
-_OVERRIDE_DICT_FIELDS = (
-    "out_static_libs",
-    "out_shared_libs",
-    "out_interface_libs",
-    "out_binaries",
-)
-
-def _render_string_list_dict(d):
-    # Render a {triplet: [name, ...]} dict as the Starlark literal for a
-    # vcpkg_export(...) kwarg. Skips empty value lists. Returns None if there
-    # is no non-empty entry, so the caller can omit the kwarg entirely.
-    items = []
-    for triplet in sorted(d.keys()):
-        values = d[triplet]
-        if not values:
-            continue
-        rendered = ", ".join(["\"{}\"".format(v) for v in values])
-        items.append("        \"{}\": [{}],".format(triplet, rendered))
-    if not items:
+def _render_override_kwarg(override_doc):
+    # Render an override doc ({"entries": [...]}) as the lines for an
+    # `override_json = """..."""` kwarg in a vcpkg_export(...) call.
+    # Returns None when there are no entries (so the caller omits the kwarg).
+    if not override_doc.get("entries"):
         return None
-    return ["{"] + items + ["    }"]
+    pretty = json.encode_indent(override_doc, indent = "  ")
+    return ["    override_json = \"\"\""] + pretty.splitlines() + ["\"\"\","]
 
 def _vcpkg_repo_impl(repo_ctx):
     vcpkg_install_target_name = "install_tree"
@@ -96,9 +83,7 @@ def _vcpkg_repo_impl(repo_ctx):
         else:
             packages.append(dep["name"])
 
-    overrides_by_pkg = {}
-    for ov in json.decode(repo_ctx.attr.overrides_json):
-        overrides_by_pkg[ov["package"]] = ov
+    overrides_by_pkg = json.decode(repo_ctx.attr.overrides_json)
 
     triplet_mappings = json.decode(repo_ctx.attr.triplet_mappings_json)
 
@@ -184,17 +169,9 @@ def _vcpkg_repo_impl(repo_ctx):
             "    triplet = \":{}\",".format(triplet_info_target),
         ]
 
-        ov = overrides_by_pkg.get(pkg)
-        if ov:
-            for field in _OVERRIDE_DICT_FIELDS:
-                rendered = _render_string_list_dict(ov.get(field) or {})
-                if rendered:
-                    # rendered is ["{", "        \"\": [...],", ..., "    }"]
-                    block.append("    {} = {}".format(field, rendered[0]))
-                    block += rendered[1:-1]
-                    block.append("    {},".format(rendered[-1]))
-            if ov.get("out_headers_only"):
-                block.append("    out_headers_only = True,")
+        rendered = _render_override_kwarg(overrides_by_pkg.get(pkg) or {})
+        if rendered:
+            block += rendered
 
         block += [
             "    visibility = [\"//visibility:public\"],",
@@ -280,7 +257,17 @@ vcpkg_package_override = tag_class(attrs = {
         mandatory = True,
     ),
     "triplet": attr.string(
-        doc = "If non-empty, restricts the override to this triplet. Empty == all triplets.",
+        doc = "If non-empty, restricts this override to this triplet.",
+        default = "",
+    ),
+    "compilation_mode": attr.string(
+        doc = (
+            "If non-empty, restricts this override to this Bazel compilation " +
+            "mode (`dbg`, `opt`, `fastbuild`). When unset, the override " +
+            "applies to all modes — and is shadowed by any mode-specific " +
+            "override for the same (source, package, triplet)."
+        ),
+        values = ["", "dbg", "opt", "fastbuild"],
         default = "",
     ),
     "out_static_libs": attr.string_list(default = []),
@@ -328,28 +315,33 @@ def _vcpkg_mod(module_ctx):
             build_file_content = VCPKG_ROOT_BUILD_FILE,
         )
         
-    # Aggregate overrides per (source.name, package) into per-triplet dicts.
-    # Each tag with `triplet = "x"` becomes one entry under key "x"; a tag
-    # with no `triplet` becomes the "" (fallback) key. Multiple tags for the
-    # same (source, package, triplet) overlay (last writer wins per field).
+    # Aggregate overrides per (source.name, package) into a list of entries.
+    # Each `package_override` tag becomes one entry; the entry's optional
+    # `triplet` and `compilation_mode` fields scope it. The vcpkg_export rule
+    # picks the most-specific matching entry at analysis time.
+    _OV_LIST_FIELDS = ("out_static_libs", "out_shared_libs", "out_interface_libs", "out_binaries")
     overrides_by_source = {}
     for mod in module_ctx.modules:
         for ov in mod.tags.package_override:
             by_pkg = overrides_by_source.setdefault(ov.source, {})
-            entry = by_pkg.setdefault(ov.package, {
-                "package": ov.package,
-                "out_static_libs": {},
-                "out_shared_libs": {},
-                "out_interface_libs": {},
-                "out_binaries": {},
-                "out_headers_only": False,
-            })
-            for field in ("out_static_libs", "out_shared_libs", "out_interface_libs", "out_binaries"):
+            entries = by_pkg.setdefault(ov.package, [])
+
+            entry = {}
+            if ov.triplet:
+                entry["triplet"] = ov.triplet
+            if ov.compilation_mode:
+                entry["compilation_mode"] = ov.compilation_mode
+            for field in _OV_LIST_FIELDS:
                 values = getattr(ov, field)
                 if values:
-                    entry[field][ov.triplet] = list(values)
+                    entry[field] = list(values)
             if ov.out_headers_only:
                 entry["out_headers_only"] = True
+
+            # Skip tags that carry only scoping metadata and no payload.
+            payload_present = any([k for k in entry.keys() if k not in ("triplet", "compilation_mode")])
+            if payload_present:
+                entries.append(entry)
 
     # Collect user-declared triplet mappings globally (across modules).
     # Stringifying a Label yields the canonical apparent-repo form
@@ -384,10 +376,10 @@ def _vcpkg_mod(module_ctx):
 
     for mod in module_ctx.modules:
         for source in mod.tags.source:
-            applicable = []
             by_pkg = overrides_by_source.get(source.name, {})
+            applicable = {}
             for pkg in sorted(by_pkg.keys()):
-                applicable.append(by_pkg[pkg])
+                applicable[pkg] = {"entries": by_pkg[pkg]}
 
             vcpkg_repo(
                 name = source.name,
