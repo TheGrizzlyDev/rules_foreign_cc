@@ -1,0 +1,14 @@
+load("@rules_foreign_cc//foreign_cc:defs.bzl", "cmake")
+
+cmake(
+    name = "imglib",
+    lib_source = "//vcpkg_with_cmake/imglib:sources",
+    out_static_libs = ["libimglib.a"],
+    deps = ["@vcpkg_deps//:libpng"],
+)
+
+cc_binary(
+    name = "main",
+    srcs = ["main.cpp"],
+    deps = [":imglib"],
+)

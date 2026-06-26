@@ -2,6 +2,11 @@ load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
 load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
 load(
+    "//foreign_cc:providers.bzl",
+    "ForeignCcArtifactInfo",
+    "ForeignCcDepsInfo",
+)
+load(
     "//foreign_cc/private:framework.bzl",
     "CC_EXTERNAL_RULE_FRAGMENTS",
     "FOREIGN_CC_FRAMEWORK_COMMON_ATTRS",
@@ -277,9 +282,30 @@ def _vcpkg_export_impl(ctx):
         CcInfo(compilation_context = compilation_context, linking_context = linking_context),
     ] + dep_cc_infos)
 
+    # Expose this export tree as a ForeignCcArtifactInfo so downstream
+    # foreign_cc rules (cmake / configure_make / etc.) pick it up via
+    # CMAKE_PREFIX_PATH and the $EXT_BUILD_DEPS staging. Transitive
+    # ForeignCcDepsInfo from `deps` is merged so the prefix path covers
+    # every vcpkg package in the chain.
+    own_artifact = ForeignCcArtifactInfo(
+        gen_dir = export_dir,
+        bin_dir_name = "bin",
+        dll_dir_name = "bin",
+        lib_dir_name = "lib",
+        include_dir_name = "include",
+    )
+    transitive_artifacts = []
+    for dep in ctx.attr.deps:
+        if ForeignCcDepsInfo in dep:
+            transitive_artifacts.append(dep[ForeignCcDepsInfo].artifacts)
+
     return [
         DefaultInfo(files = depset([export_dir])),
         merged,
+        ForeignCcDepsInfo(artifacts = depset(
+            direct = [own_artifact],
+            transitive = transitive_artifacts,
+        )),
     ]
 
 vcpkg_export = rule(

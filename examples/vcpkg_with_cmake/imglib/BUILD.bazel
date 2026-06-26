@@ -1,0 +1,9 @@
+filegroup(
+    name = "sources",
+    srcs = glob([
+        "CMakeLists.txt",
+        "*.h",
+        "*.cpp",
+    ]),
+    visibility = ["//vcpkg_with_cmake:__pkg__"],
+)
