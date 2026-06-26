@@ -1,3 +1,9 @@
+# TODO(TheGrizzlyDev): the Windows code paths in this file (the cp-on-msys
+# branch of the export script, the .lib/.dll naming in _static_basename /
+# _shared_basename, the import-lib pairing for shared libs) are written
+# against the docs but have not been exercised on a Windows host. Validate
+# with a Windows CI runner before claiming first-class support.
+
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
 load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
@@ -5,6 +11,11 @@ load(
     "//foreign_cc:providers.bzl",
     "ForeignCcArtifactInfo",
     "ForeignCcDepsInfo",
+)
+load(
+    "//foreign_cc/private:cc_toolchain_util.bzl",
+    "LibrariesToLinkInfo",
+    "create_linking_info",
 )
 load(
     "//foreign_cc/private:framework.bzl",
@@ -36,6 +47,38 @@ def _resolve_triplet(ctx):
             "(see foreign_cc/private/framework/platform.bzl).",
         )
     return triplet
+
+def _static_basename(name, is_windows):
+    return name + ".lib" if is_windows else "lib" + name + ".a"
+
+def _shared_basename(name, is_windows, is_macos):
+    if is_windows:
+        return name + ".dll"
+    if is_macos:
+        return "lib" + name + ".dylib"
+    return "lib" + name + ".so"
+
+def _extract_lib_file(ctx, export_dir, subdir, basename):
+    """Declare a File for `<export_dir>/<subdir>/<basename>` and emit a copy
+    action that materializes it out of the tree-artifact `export_dir`.
+
+    cc_common APIs need concrete File objects, so we can't reference entries
+    inside the tree directly — they aren't tracked individually at analysis
+    time. Copying lets us hand the linker a real File and lets cc_binary
+    pick up shared libraries as runfiles automatically.
+    """
+    out = ctx.actions.declare_file(
+        "{}_libs/{}/{}".format(ctx.attr.name, subdir, basename),
+    )
+    ctx.actions.run_shell(
+        inputs = [export_dir],
+        outputs = [out],
+        command = "cp \"$1\" \"$2\"",
+        arguments = ["{}/{}/{}".format(export_dir.path, subdir, basename), out.path],
+        mnemonic = "VcpkgExtractLib",
+        progress_message = "vcpkg_export: extracting {}/{}".format(subdir, basename),
+    )
+    return out
 
 def _resolve_overlay_dirs(targets):
     """Map each overlay target to a single directory exec path.
@@ -205,14 +248,16 @@ mkdir -p "$export_dir"
 # Decide which install-tree-relative entries are kept, and where they land
 # inside the export tree. Returns the destination relative path on stdout, or
 # empty if the entry should be skipped.
-# vcpkg layout: include/* (release-only), lib/*, share/*, lib/pkgconfig/*,
-# debug/lib/*, debug/share/* (rare). Headers are not duplicated under debug/.
+# vcpkg layout: include/* (release-only), lib/*, bin/* (Windows DLLs),
+# share/*, lib/pkgconfig/*, debug/lib/*, debug/bin/*, debug/share/* (rare).
+# Headers are not duplicated under debug/.
 classify() {
   local rel="$1"
   if [ "$debug" = "1" ]; then
     case "$rel" in
       include/*) printf '%s' "$rel" ;;
       debug/lib/*) printf '%s' "${rel#debug/}" ;;
+      debug/bin/*) printf '%s' "${rel#debug/}" ;;
       debug/share/*) printf '%s' "${rel#debug/}" ;;
       # Use release-side share/ for CMake config files. Most ports install
       # them only under <triplet>/share/<pkg>/; vcpkg's own debug-vs-release
@@ -222,7 +267,7 @@ classify() {
     esac
   else
     case "$rel" in
-      include/*|lib/*|share/*) printf '%s' "$rel" ;;
+      include/*|lib/*|bin/*|share/*) printf '%s' "$rel" ;;
       *) printf '' ;;
     esac
   fi
@@ -250,22 +295,25 @@ while IFS= read -r line || [ -n "$line" ]; do
   dst="$(classify "$rel")"
   [ -z "$dst" ] && continue
 
-  # TODO(TheGrizzlyDev): add bin/ for Windows — vcpkg places DLLs there,
-  # and the relative-symlink strategy below won't work on Windows either:
-  # we'll need junctions or a copy tree.
-
   target="$export_dir/$dst"
   mkdir -p "$(dirname "$target")"
 
-  # Relative symlink: depth = (slashes in dst) + 1.
-  # That many "../" hops from the symlink's directory reach <export_dir>'s
-  # parent, from where <base_rel> points at the install_tree.
-  slashes="${dst//[^\/]/}"
-  depth=$((${#slashes} + 1))
-  prefix=""
-  for ((i=0; i<depth; i++)); do prefix="../$prefix"; done
-
-  ln -sfn "${prefix}${base_rel}/${triplet}/${rel}" "$target"
+  case "${OSTYPE:-}" in
+    msys*|cygwin*|win*)
+      # Windows: NTFS symlinks need elevation or developer mode. Copy.
+      cp "$install_tree/$triplet/$rel" "$target"
+      ;;
+    *)
+      # POSIX: relative symlink. depth = (slashes in dst) + 1 ../'s from
+      # the symlink's directory reach <export_dir>'s parent, from where
+      # <base_rel> points at the install_tree.
+      slashes="${dst//[^\/]/}"
+      depth=$((${#slashes} + 1))
+      prefix=""
+      for ((i=0; i<depth; i++)); do prefix="../$prefix"; done
+      ln -sfn "${prefix}${base_rel}/${triplet}/${rel}" "$target"
+      ;;
+  esac
 done < "$listfile"
 """
 
@@ -316,31 +364,50 @@ def _vcpkg_export_impl(ctx):
         ),
     )
 
-    # Resolution order for link flags:
-    #   1. override entry says out_headers_only=True -> no -l flags.
-    #   2. override entry lists out_static/shared/interface libs -> use them.
-    #   3. Fallback: guess [package] as the single -l<package> name. The
-    #      [package] heuristic only matches single-lib packages whose lib
-    #      basename equals the package name; everything else requires a
-    #      vcpkg.package_override in MODULE.bazel.
+    # Materialize each declared lib as a separate File copied out of the
+    # export tree, then feed concrete File objects to cc_common so:
+    #   - static libs link normally,
+    #   - shared libs (.so/.dylib/.dll) propagate as runfiles to consumers,
+    #   - on Windows the import lib (.lib) + DLL pair is correctly modeled.
+    is_windows = "windows" in triplet
+    is_macos = "osx" in triplet or "ios" in triplet
+    static_files = []
+    shared_files = []
+    interface_files = []
+    extra_runfiles = []
     if override.get("out_headers_only"):
-        link_flags = []
+        pass
     else:
-        explicit_libs = (
-            override.get("out_static_libs", []) +
-            override.get("out_shared_libs", []) +
-            override.get("out_interface_libs", [])
-        )
-        library_names = explicit_libs if explicit_libs else [ctx.attr.package]
-        # Heuristic: vcpkg ports conventionally suffix debug libraries with
-        # `d` (e.g. `libfmtd.a`, `libbz2d.a`). In debug mode, apply that
-        # suffix to lib names that came from the fallback or from a
-        # mode-agnostic override entry. Mode-scoped entries
-        # (`compilation_mode = "dbg"`) are taken verbatim — they're the
-        # explicit override for packages that don't follow the convention.
-        if debug and not override.get("_mode_scoped"):
-            library_names = [n + "d" for n in library_names]
-        link_flags = ["-L" + export_dir.path + "/lib"] + ["-l" + n for n in library_names]
+        explicit_static = override.get("out_static_libs", [])
+        explicit_shared = override.get("out_shared_libs", [])
+        explicit_interface = override.get("out_interface_libs", [])
+        any_explicit = explicit_static or explicit_shared or explicit_interface
+
+        if not any_explicit:
+            # Fallback: guess one static lib named after the package, with
+            # the conventional +d suffix in debug.
+            fallback_name = ctx.attr.package + ("d" if debug else "")
+            explicit_static = [fallback_name]
+        elif debug and not override.get("_mode_scoped"):
+            # Mode-agnostic explicit override in debug mode: apply +d.
+            explicit_static = [n + "d" for n in explicit_static]
+            explicit_shared = [n + "d" for n in explicit_shared]
+            explicit_interface = [n + "d" for n in explicit_interface]
+
+        for name in explicit_static:
+            static_files.append(_extract_lib_file(ctx, export_dir, "lib", _static_basename(name, is_windows)))
+        for name in explicit_shared:
+            shared_basename = _shared_basename(name, is_windows, is_macos)
+            shared_dir = "bin" if is_windows else "lib"
+            shared_file = _extract_lib_file(ctx, export_dir, shared_dir, shared_basename)
+            shared_files.append(shared_file)
+            extra_runfiles.append(shared_file)
+            if is_windows:
+                # Windows links against the import lib (.lib) sitting next to
+                # static libs under lib/, not the DLL itself.
+                interface_files.append(_extract_lib_file(ctx, export_dir, "lib", name + ".lib"))
+        for name in explicit_interface:
+            interface_files.append(_extract_lib_file(ctx, export_dir, "lib", _static_basename(name, is_windows)))
 
     # `defines` come from two sources: the rule attr (substituted here) and
     # the matched override entry (already substituted inside _resolve_override).
@@ -354,14 +421,14 @@ def _vcpkg_export_impl(ctx):
         defines = depset(expanded_defines),
     )
 
-    linking_context = cc_common.create_linking_context(
-        linker_inputs = depset([
-            cc_common.create_linker_input(
-                owner = ctx.label,
-                user_link_flags = depset(link_flags),
-                additional_inputs = depset([export_dir]),
-            ),
-        ]),
+    linking_context = create_linking_info(
+        ctx,
+        [],
+        LibrariesToLinkInfo(
+            static_libraries = static_files,
+            shared_libraries = shared_files,
+            interface_libraries = interface_files,
+        ),
     )
 
     dep_cc_infos = [dep[CcInfo] for dep in ctx.attr.deps]
@@ -386,8 +453,15 @@ def _vcpkg_export_impl(ctx):
         if ForeignCcDepsInfo in dep:
             transitive_artifacts.append(dep[ForeignCcDepsInfo].artifacts)
 
+    # Propagate shared libraries as runfiles so consuming cc_binary/cc_test
+    # can find the .so/.dylib/.dll at runtime. cc_common already wires
+    # dynamic_library into linker_input; the runfiles cover the loader.
+    runfiles = ctx.runfiles(files = extra_runfiles)
+    for dep in ctx.attr.deps:
+        runfiles = runfiles.merge(dep[DefaultInfo].default_runfiles)
+
     return [
-        DefaultInfo(files = depset([export_dir])),
+        DefaultInfo(files = depset([export_dir]), runfiles = runfiles),
         merged,
         ForeignCcDepsInfo(artifacts = depset(
             direct = [own_artifact],
@@ -398,6 +472,8 @@ def _vcpkg_export_impl(ctx):
 vcpkg_export = rule(
     _vcpkg_export_impl,
     attrs = {
+        "alwayslink": attr.bool(default = False),
+        "static_suffix": attr.string(default = ""),
         "compilation_mode": attr.string(
             doc = (
                 "Per-target override of Bazel's compilation mode. If unset, " +
@@ -454,7 +530,12 @@ vcpkg_export = rule(
             default = _DEFAULT_TRIPLET,
             providers = [VcpkgTripletInfo],
         ),
+        "_cc_toolchain": attr.label(
+            default = Label("@bazel_tools//tools/cpp:current_cc_toolchain"),
+        ),
     },
+    fragments = ["cpp"],
+    toolchains = ["@bazel_tools//tools/cpp:toolchain_type"],
     provides = [CcInfo],
 )
 
