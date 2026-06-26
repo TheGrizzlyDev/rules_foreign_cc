@@ -1,0 +1,5 @@
+filegroup(
+    name = "ports",
+    srcs = glob(["**/*"]),
+    visibility = ["//visibility:public"],
+)

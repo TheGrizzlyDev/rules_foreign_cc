@@ -1,0 +1,5 @@
+{
+  "name": "bazel-test",
+  "version": "1.0.0",
+  "description": "Header-only port shipped via overlay-ports, used to exercise rules_foreign_cc's vcpkg.source(overlay_ports = ...) plumbing."
+}

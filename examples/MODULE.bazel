@@ -180,4 +180,16 @@ vcpkg.package_override(
     ],
 )
 
-use_repo(vcpkg, "vcpkg_deps")
+vcpkg.source(
+    name = "vcpkg_overlay_deps",
+    manifest = "//vcpkg_with_overlay:vcpkg.json",
+    overlay_ports = ["//vcpkg_with_overlay/ports:ports"],
+)
+
+vcpkg.package_override(
+    source = "vcpkg_overlay_deps",
+    package = "bazel-test",
+    out_headers_only = True,
+)
+
+use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps")

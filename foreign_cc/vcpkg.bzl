@@ -41,8 +41,8 @@ def _resolve_overlay_dirs(targets):
     """Map each overlay target to a single directory exec path.
 
     Accepts either a `bazel_skylib` `directory` target (uses DirectoryInfo.path)
-    or any file-providing target (uses the common parent dirname of its files,
-    falling back to the dirname of the first file).
+    or a filegroup (uses the filegroup's package as the overlay root, which
+    matches the conventional `filegroup(srcs = glob(["**/*"]))` shape).
     """
     dirs = []
     for tgt in targets:
@@ -52,7 +52,19 @@ def _resolve_overlay_dirs(targets):
         files = tgt[DefaultInfo].files.to_list()
         if not files:
             fail("vcpkg_install: overlay target {} has no files.".format(tgt.label))
-        dirs.append(files[0].dirname)
+        # Walk up from any file's dir until we hit the filegroup's package
+        # path. For `filegroup(srcs = glob(["**/*"]))` in package P, every
+        # file's path is `<exec_root>/P/...`, so we want `<exec_root>/P`.
+        pkg = tgt.label.package
+        f = files[0]
+        # f.path = "<workspace_root>/<package>/<relative>". Find the
+        # boundary by searching for "/<package>/" in the path.
+        marker = "/" + pkg + "/"
+        idx = f.path.find(marker)
+        if idx < 0:
+            dirs.append(f.dirname)
+        else:
+            dirs.append(f.path[:idx + len(marker) - 1])
     return dirs
 
 _OVERRIDE_PAYLOAD_FIELDS = (

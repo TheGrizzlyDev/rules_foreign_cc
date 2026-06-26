@@ -60,6 +60,16 @@ tools = module_extension(
     },
 )
 
+def _overlay_dir_for_label(ctx, label):
+    """Resolve an overlay label to its package directory on disk.
+
+    `ctx.path(label)` returns `<source_tree>/<package>/<name>` even when no
+    on-disk file with that name exists (typical for `filegroup(name=...)`).
+    The package dir is the parent of that path, which is where the user's
+    overlay-port subdirectories actually live.
+    """
+    return ctx.path(label).dirname
+
 def _watch_tree(ctx, path):
     """Recursively `ctx.watch` every file under `path` so changes inside an
     overlay invalidate the calling repo or module extension. `path` must be
@@ -128,8 +138,8 @@ def _vcpkg_capture_repo_impl(repo_ctx):
                 ),
             )
 
-    overlay_ports_paths = [repo_ctx.path(lbl) for lbl in repo_ctx.attr.overlay_ports]
-    overlay_triplets_paths = [repo_ctx.path(lbl) for lbl in repo_ctx.attr.overlay_triplets]
+    overlay_ports_paths = [_overlay_dir_for_label(repo_ctx, lbl) for lbl in repo_ctx.attr.overlay_ports]
+    overlay_triplets_paths = [_overlay_dir_for_label(repo_ctx, lbl) for lbl in repo_ctx.attr.overlay_triplets]
     for p in overlay_ports_paths + overlay_triplets_paths:
         _watch_tree(repo_ctx, p)
 
@@ -325,11 +335,20 @@ def _vcpkg_repo_impl(repo_ctx):
     # build for and many of which fail (cross-toolchains, host mismatches).
     target_triplets = sorted({tm["triplet"]: True for tm in triplet_mappings}.keys())
 
+    # Resolve overlay dirs and watch their contents so changes invalidate
+    # the repo. Config file lives next to the manifest; vcpkg auto-loads it.
+    if repo_ctx.attr.vcpkg_configuration:
+        repo_ctx.watch(repo_ctx.path(repo_ctx.attr.vcpkg_configuration))
+    overlay_ports_paths = [_overlay_dir_for_label(repo_ctx, lbl) for lbl in repo_ctx.attr.overlay_ports]
+    overlay_triplets_paths = [_overlay_dir_for_label(repo_ctx, lbl) for lbl in repo_ctx.attr.overlay_triplets]
+    for p in overlay_ports_paths + overlay_triplets_paths:
+        _watch_tree(repo_ctx, p)
+
     deps_by_triplet_by_pkg = {}  # pkg -> {triplet: [direct deps]}
     manifest_dir = manifest_path.dirname
     for triplet in target_triplets:
         triplet_scratch = "{}/depend-info/{}".format(scratch_root, triplet)
-        result = repo_ctx.execute([
+        cmd = [
             str(vcpkg_exe),
             "depend-info",
             "--format=list",
@@ -339,7 +358,12 @@ def _vcpkg_repo_impl(repo_ctx):
             "--x-buildtrees-root={}/buildtrees".format(triplet_scratch),
             "--x-packages-root={}/packages".format(triplet_scratch),
             "--downloads-root={}/downloads".format(triplet_scratch),
-        ], environment = {"VCPKG_ROOT": str(vcpkg_root_path)})
+        ]
+        for p in overlay_ports_paths:
+            cmd.append("--overlay-ports={}".format(p))
+        for p in overlay_triplets_paths:
+            cmd.append("--overlay-triplets={}".format(p))
+        result = repo_ctx.execute(cmd, environment = {"VCPKG_ROOT": str(vcpkg_root_path)})
         if result.return_code != 0:
             fail(
                 "vcpkg depend-info failed for triplet '{}'.\nstderr:\n{}\nstdout:\n{}".format(
@@ -422,8 +446,6 @@ def _vcpkg_repo_impl(repo_ctx):
     ]
 
     downloads_by_triplet = json.decode(repo_ctx.attr.downloads_by_triplet_json)
-    overlay_ports_labels = json.decode(repo_ctx.attr.overlay_ports_labels_json)
-    overlay_triplets_labels = json.decode(repo_ctx.attr.overlay_triplets_labels_json)
     install_block = [
         "vcpkg_install(",
         "    name = \"{}\",".format(vcpkg_install_target_name),
@@ -433,16 +455,16 @@ def _vcpkg_repo_impl(repo_ctx):
         "    home = \":{}_home\",".format(vcpkg_install_target_name),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
-    if repo_ctx.attr.vcpkg_configuration_label:
-        install_block.append("    vcpkg_configuration = \"{}\",".format(repo_ctx.attr.vcpkg_configuration_label))
-    if overlay_ports_labels:
+    if repo_ctx.attr.vcpkg_configuration:
+        install_block.append("    vcpkg_configuration = \"{}\",".format(repo_ctx.attr.vcpkg_configuration))
+    if repo_ctx.attr.overlay_ports:
         install_block.append("    overlay_ports = [")
-        for lbl in overlay_ports_labels:
+        for lbl in repo_ctx.attr.overlay_ports:
             install_block.append("        \"{}\",".format(lbl))
         install_block.append("    ],")
-    if overlay_triplets_labels:
+    if repo_ctx.attr.overlay_triplets:
         install_block.append("    overlay_triplets = [")
-        for lbl in overlay_triplets_labels:
+        for lbl in repo_ctx.attr.overlay_triplets:
             install_block.append("        \"{}\",".format(lbl))
         install_block.append("    ],")
     if downloads_by_triplet:
@@ -509,19 +531,9 @@ vcpkg_repo = repository_rule(
     implementation = _vcpkg_repo_impl,
     attrs = {
         "manifest": attr.label(allow_single_file = True),
-        "vcpkg_configuration_label": attr.string(
-            default = "",
-            doc = "Stringified label of the user's vcpkg-configuration.json " +
-                  "(if any), passed through to the generated vcpkg_install.",
-        ),
-        "overlay_ports_labels_json": attr.string(
-            default = "[]",
-            doc = "JSON-encoded list of stringified labels for overlay-port dirs.",
-        ),
-        "overlay_triplets_labels_json": attr.string(
-            default = "[]",
-            doc = "JSON-encoded list of stringified labels for overlay-triplet dirs.",
-        ),
+        "vcpkg_configuration": attr.label(allow_single_file = True),
+        "overlay_ports": attr.label_list(allow_files = True),
+        "overlay_triplets": attr.label_list(allow_files = True),
         "overrides_json": attr.string(
             default = "[]",
             doc = "JSON-encoded list of per-package override dicts. See vcpkg.package_override.",
@@ -814,9 +826,9 @@ def _vcpkg_mod(module_ctx):
             vcpkg_repo(
                 name = source.name,
                 manifest = source.manifest,
-                vcpkg_configuration_label = str(source.vcpkg_configuration) if source.vcpkg_configuration else "",
-                overlay_ports_labels_json = json.encode([str(l) for l in source.overlay_ports]),
-                overlay_triplets_labels_json = json.encode([str(l) for l in source.overlay_triplets]),
+                vcpkg_configuration = source.vcpkg_configuration,
+                overlay_ports = source.overlay_ports,
+                overlay_triplets = source.overlay_triplets,
                 vcpkg_root = vcpkg_repo_name(source.root),
                 vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
                 overrides_json = json.encode(applicable),
