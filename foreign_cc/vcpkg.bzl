@@ -659,6 +659,14 @@ def _vcpkg_install_impl(ctx):
     if not vcpkg_files:
         fail("vcpkg_install: resolved vcpkg toolchain has no files.")
     vcpkg_cli = vcpkg_files[0]
+    # When `allow_network` is on: the x-script mirror handles pre-captured
+    # assets first, but on miss vcpkg falls through to the origin URL
+    # (achieved by omitting `x-block-origin`). Off (default): block origin
+    # to keep the action fully hermetic.
+    if ctx.attr.allow_network:
+        asset_sources = "x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}".format(serve_script.path)
+    else:
+        asset_sources = "x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}".format(serve_script.path)
     install_cmd_lines = [
         "\"$$EXT_BUILD_ROOT$$/{}\" install \\".format(vcpkg_cli.path),
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
@@ -666,7 +674,7 @@ def _vcpkg_install_impl(ctx):
         "  --x-buildtrees-root=\"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \\".format(scratch_dir.path),
         "  --x-packages-root=\"$$EXT_BUILD_ROOT$$/{}/packages\" \\".format(scratch_dir.path),
         "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
-        "  --x-asset-sources=\"x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}\" \\".format(serve_script.path),
+        "  --x-asset-sources=\"{}\" \\".format(asset_sources),
     ]
     # When a vcpkg_configuration is set, vcpkg auto-loads its overlays;
     # label-declared overlays remain declared inputs (for Bazel dep
@@ -718,6 +726,14 @@ def _vcpkg_install_impl(ctx):
         declared_inputs = declared_inputs_final,
     )
 
+    # vcpkg needs to invoke `git show` against the .git/ inside the root
+    # when the manifest carries `builtin-baseline`/`overrides`. Bazel's
+    # sandbox materialises action inputs as symlinks under an execroot
+    # layout git rejects, so opt out via `no-sandbox`.
+    exec_reqs = {"no-sandbox": "1"}
+    if ctx.attr.allow_network:
+        exec_reqs["requires-network"] = "1"
+
     foreign_cc_install_action(
         ctx,
         name = ctx.attr.name,
@@ -728,13 +744,8 @@ def _vcpkg_install_impl(ctx):
         user_script_lines = user_script_lines,
         data_dependencies = ctx.attr.data + ctx.attr.build_data + ctx.attr.toolchains,
         tools_env = tools_env,
-        block_network = True,
-        # vcpkg needs to invoke `git show` against the .git/ inside the
-        # root when the manifest carries `builtin-baseline`/`overrides`.
-        # Bazel's sandbox materialises action inputs as symlinks under
-        # execroot layout that git rejects; opt out so the action sees
-        # the on-disk repo directly.
-        extra_execution_requirements = {"no-sandbox": "1"},
+        block_network = not ctx.attr.allow_network,
+        extra_execution_requirements = exec_reqs,
     )
 
     return [DefaultInfo(files = depset([install_tree]))]
@@ -788,6 +799,16 @@ _VCPKG_INSTALL_ATTRS.update({
     "overlay_triplets": attr.label_list(
         doc = "Directories passed to vcpkg as --overlay-triplets.",
         allow_files = True,
+    ),
+    "allow_network": attr.bool(
+        default = False,
+        doc = (
+            "Let the install action reach the network. Some ports fetch " +
+            "extra assets from their portfile at build time (past what " +
+            "our capture pass sees); enabling this lets vcpkg fall back " +
+            "to the origin URL when the pre-captured mirror misses. Off " +
+            "by default so builds stay hermetic."
+        ),
     ),
     "features_flag": attr.label(
         doc = (

@@ -715,6 +715,8 @@ def _vcpkg_repo_impl(repo_ctx):
         for t in sorted(downloads_by_triplet.keys()):
             install_block.append("        \"{}\": \"{}\",".format(t, downloads_by_triplet[t]))
         install_block.append("    },")
+    if repo_ctx.attr.allow_network:
+        install_block.append("    allow_network = True,")
     install_block += [")", ""]
     lines += install_block
     # Collect every package that appears anywhere in the resolved dep graph
@@ -772,6 +774,7 @@ vcpkg_repo = repository_rule(
         "vcpkg_configuration": attr.label(allow_single_file = True),
         "overlay_ports": attr.label_list(allow_files = True),
         "overlay_triplets": attr.label_list(allow_files = True),
+        "allow_network": attr.bool(default = False),
         "overrides_json": attr.string(
             default = "[]",
             doc = "JSON-encoded list of per-package override dicts. See vcpkg.package_override.",
@@ -975,6 +978,15 @@ vcpkg_source = tag_class(attrs = {
             "--overlay-triplets. Same shape constraints as `overlay_ports`."
         ),
         allow_files = True,
+    ),
+    "allow_network": attr.bool(
+        default = False,
+        doc = (
+            "Let the install action reach the network. Some ports fetch " +
+            "extra assets from their portfile at build time that our " +
+            "capture pass can't see; enabling this lets vcpkg fall back " +
+            "to the origin URL on cache miss."
+        ),
     ),
     "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME),
 })
@@ -1431,6 +1443,7 @@ def _vcpkg_mod(module_ctx):
                 vcpkg_configuration = source.vcpkg_configuration,
                 overlay_ports = source.overlay_ports,
                 overlay_triplets = source.overlay_triplets,
+                allow_network = source.allow_network,
                 vcpkg_root = resolved_root_repo,
                 vcpkg_root_marker = "@{}//:.vcpkg-root".format(resolved_root_repo),
                 overrides_json = json.encode(applicable),

@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "M67HWdZu+/N7K97PVpZ1IPL/bAu2s92f9rTGhH2KWUY=",
+        "bzlTransitiveDigest": "zk6Dcil+Jw0UbgBNVwAYSrH7KqbuhxFY3+LrwJsUYcI=",
         "usagesDigest": "F+jC7fKuRr/B91UnhFw1TsywJ330ak5zVRE5QjI9rUM=",
         "recordedFileInputs": {
           "@@//vcpkg.json": "96e20f4e748fea593b3f0513d23051dc133a14f32f302fc97024eac3d13abfdc",
@@ -418,6 +418,7 @@
               "vcpkg_configuration": "@@//:vcpkg-configuration.json",
               "overlay_ports": [],
               "overlay_triplets": [],
+              "allow_network": false,
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bzip2\":{\"entries\":[{\"defines\":[\"VCPKG_$$VCPKG_PACKAGE_UPPER$$_NAME=\\\"$$VCPKG_PACKAGE$$\\\"\",\"VCPKG_$$VCPKG_PACKAGE_UPPER$$_TRIPLET=\\\"$$VCPKG_TRIPLET$$\\\"\"],\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
@@ -533,6 +534,7 @@
                 "@@//vcpkg_with_overlay/ports:ports"
               ],
               "overlay_triplets": [],
+              "allow_network": false,
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bazel-test\":{\"entries\":[{\"out_binaries\":[\"greet\"],\"out_headers_only\":true}]},\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
@@ -644,6 +646,7 @@
               "manifest": "@@//vcpkg_root_git:vcpkg.json",
               "overlay_ports": [],
               "overlay_triplets": [],
+              "allow_network": false,
               "vcpkg_root": "vcpkg_root_vcpkg_git_root__e8709ee8703328fe121eab33cda73a406a7626b7",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_vcpkg_git_root__e8709ee8703328fe121eab33cda73a406a7626b7//:.vcpkg-root",
               "overrides_json": "{\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
@@ -743,6 +746,7 @@
               "manifest": "@@//vcpkg_features:vcpkg.json",
               "overlay_ports": [],
               "overlay_triplets": [],
+              "allow_network": false,
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
@@ -850,6 +854,7 @@
               "vcpkg_configuration": "@@//vcpkg_config_overlay:vcpkg-configuration.json",
               "overlay_ports": [],
               "overlay_triplets": [],
+              "allow_network": false,
               "vcpkg_root": "vcpkg_root_default_vcpkg_root",
               "vcpkg_root_marker": "@@rules_foreign_cc++vcpkg+vcpkg_root_default_vcpkg_root//:.vcpkg-root",
               "overrides_json": "{\"bzip2\":{\"entries\":[{\"out_static_libs\":[\"bz2\"]}]},\"config-overlay-test\":{\"entries\":[{\"out_headers_only\":true}]},\"jsoncpp\":{\"entries\":[{\"compilation_mode\":\"dbg\",\"out_static_libs\":[\"$$VCPKG_PACKAGE$$\"]}]},\"libpng\":{\"entries\":[{\"out_static_libs\":[\"png16\"]}]},\"vcpkg-cmake\":{\"entries\":[{\"out_headers_only\":true}]},\"vcpkg-cmake-config\":{\"entries\":[{\"out_headers_only\":true}]},\"zlib\":{\"entries\":[{\"out_static_libs\":[\"z\"]}]}}",
