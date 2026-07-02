@@ -209,4 +209,9 @@ vcpkg.source(
     root = "vcpkg_git_root",
 )
 
-use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps", "vcpkg_root_git_deps")
+vcpkg.source(
+    name = "vcpkg_features_deps",
+    manifest = "//vcpkg_features:vcpkg.json",
+)
+
+use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps", "vcpkg_root_git_deps", "vcpkg_features_deps")

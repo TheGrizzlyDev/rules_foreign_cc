@@ -12,6 +12,7 @@
 # fetch-time fallback) for that case.
 
 load("@bazel_skylib//lib:paths.bzl", "paths")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
 load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
 load(
@@ -665,6 +666,22 @@ def _vcpkg_install_impl(ctx):
         install_cmd_lines.append("  --overlay-ports=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
     for d in overlay_triplets_dirs:
         install_cmd_lines.append("  --overlay-triplets=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
+    selected_features = []
+    if ctx.attr.features_flag != None:
+        selected_features = ctx.attr.features_flag[BuildSettingInfo].value
+        unknown = [f for f in selected_features if f not in ctx.attr.declared_features]
+        if unknown:
+            fail(
+                ("vcpkg_install: features {u} were selected via {f} but are " +
+                 "not declared in the manifest's `features` block. " +
+                 "Declared: {d}.").format(
+                    u = unknown,
+                    f = ctx.attr.features_flag.label,
+                    d = list(ctx.attr.declared_features),
+                ),
+            )
+    for feat in selected_features:
+        install_cmd_lines.append("  --x-feature={} \\".format(feat))
     install_cmd_lines.append("  --triplet={}".format(triplet))
 
     user_script_lines = [
@@ -753,6 +770,20 @@ _VCPKG_INSTALL_ATTRS.update({
     "overlay_triplets": attr.label_list(
         doc = "Directories passed to vcpkg as --overlay-triplets.",
         allow_files = True,
+    ),
+    "features_flag": attr.label(
+        doc = (
+            "Optional `string_list_flag` whose value picks the manifest " +
+            "features to enable at install time. Set only when the " +
+            "manifest declares a top-level `features` block."
+        ),
+        providers = [BuildSettingInfo],
+    ),
+    "declared_features": attr.string_list(
+        doc = (
+            "Feature names declared in the manifest's top-level `features` " +
+            "block. Used to validate values coming from `features_flag`."
+        ),
     ),
     "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
     "root_file": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc

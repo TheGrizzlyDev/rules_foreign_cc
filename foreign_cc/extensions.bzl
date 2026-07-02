@@ -152,6 +152,7 @@ def _vcpkg_capture_repo_impl(repo_ctx):
     # assets, not just its label identity.
     repo_ctx.watch(manifest_path)
     manifest_dir = manifest_path.dirname
+    declared_features = sorted(json.decode(repo_ctx.read(manifest_path)).get("features", {}).keys())
 
     # Watch the configuration file (vcpkg auto-loads it from the manifest
     # dir, so we just need to make sure it's tracked for refetch).
@@ -193,6 +194,8 @@ def _vcpkg_capture_repo_impl(repo_ctx):
         cmd.append("--overlay-ports={}".format(p))
     for p in overlay_triplets_paths:
         cmd.append("--overlay-triplets={}".format(p))
+    for feat in declared_features:
+        cmd.append("--x-feature={}".format(feat))
 
     home_dir = repo_ctx.path("_scratch/home")
     repo_ctx.execute(["mkdir", "-p", str(home_dir)])
@@ -414,15 +417,18 @@ def _vcpkg_repo_impl(repo_ctx):
     # network fetch wired through repo_ctx.download instead of vcpkg's own
     # downloader. For now we just pass the file through and hope vcpkg
     # ignores artifact registries for the deps we care about.
-    # TODO(TheGrizzlyDev): vcpkg.json `features` (e.g. `gtk`, `qt`) and
-    # per-platform `default-features` aren't exposed in the module
-    # extension API — `vcpkg.source` has no `features` attribute. Tracked
-    # alongside #40.
     for dep in manifest.get("dependencies", []):
         if type(dep) == "string":
             packages.append(dep)
         else:
             packages.append(dep["name"])
+
+    # Top-level features declared in the manifest. Every declared feature
+    # gets enabled for depend-info and the asset-capture pass so the
+    # generated dep graph and asset cache cover all user-selectable
+    # feature combinations. At install time the user picks a subset via
+    # the `:features` string_list_flag we emit into the generated BUILD.
+    declared_features = sorted(manifest.get("features", {}).keys())
 
     # Write a scrubbed manifest for the install action: strip
     # `builtin-baseline`/`overrides`, both of which make vcpkg run
@@ -501,6 +507,8 @@ def _vcpkg_repo_impl(repo_ctx):
             cmd.append("--overlay-ports={}".format(p))
         for p in overlay_triplets_paths:
             cmd.append("--overlay-triplets={}".format(p))
+        for feat in declared_features:
+            cmd.append("--x-feature={}".format(feat))
         result = repo_ctx.execute(cmd, environment = {
             "VCPKG_ROOT": str(vcpkg_root_path),
             "HOME": str(home_dir),
@@ -587,8 +595,21 @@ def _vcpkg_repo_impl(repo_ctx):
     lines = [
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
         "load(\"@rules_foreign_cc//foreign_cc/private/framework:platform.bzl\", \"vcpkg_triplet_info_from_mappings\")",
-        "",
-    ] + config_setting_blocks + triplet_info_blocks
+    ]
+    if declared_features:
+        lines.append("load(\"@bazel_skylib//rules:common_settings.bzl\", \"string_list_flag\")")
+    lines.append("")
+    lines += config_setting_blocks + triplet_info_blocks
+
+    if declared_features:
+        lines += [
+            "string_list_flag(",
+            "    name = \"features\",",
+            "    build_setting_default = [],",
+            "    visibility = [\"//visibility:public\"],",
+            ")",
+            "",
+        ]
 
     downloads_by_triplet = json.decode(repo_ctx.attr.downloads_by_triplet_json)
     install_block = [
@@ -600,6 +621,9 @@ def _vcpkg_repo_impl(repo_ctx):
         "    vcpkg_cli = \"{}\",".format(repo_ctx.attr.vcpkg_cli),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
+    if declared_features:
+        install_block.append("    features_flag = \":features\",")
+        install_block.append("    declared_features = {},".format(declared_features))
     if have_scrubbed_config:
         install_block.append("    vcpkg_configuration = \"//install:vcpkg-configuration.json\",")
     if repo_ctx.attr.overlay_ports:

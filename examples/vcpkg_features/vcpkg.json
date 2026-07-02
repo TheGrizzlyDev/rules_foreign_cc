@@ -1,0 +1,15 @@
+{
+  "name": "vcpkg-features-example",
+  "version-string": "0.0.0",
+  "dependencies": ["fmt"],
+  "features": {
+    "with-zlib": {
+      "description": "Also link against zlib",
+      "dependencies": ["zlib"]
+    },
+    "with-bzip2": {
+      "description": "Also link against bzip2",
+      "dependencies": ["bzip2"]
+    }
+  }
+}

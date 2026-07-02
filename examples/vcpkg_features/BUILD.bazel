@@ -1,0 +1,10 @@
+exports_files(["vcpkg.json"])
+
+cc_binary(
+    name = "main",
+    srcs = ["main.cpp"],
+    deps = [
+        "@vcpkg_features_deps//:fmt",
+        "@vcpkg_features_deps//:zlib",
+    ],
+)
