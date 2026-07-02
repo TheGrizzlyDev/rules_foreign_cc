@@ -937,10 +937,6 @@ vcpkg_source = tag_class(attrs = {
     "root": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME),
 })
 
-# TODO(TheGrizzlyDev): add doc — per-package output overrides spliced onto the
-# generated vcpkg_export(...) calls. Mirrors the out_* attrs on vcpkg_export.
-# Each tag carries content for a single triplet (or "" == all triplets). Tags
-# for the same (source, package) merge into per-triplet dicts.
 # Built-in triplet mappings shipped with rules_foreign_cc. A default mapping is
 # dropped if any user mapping's constraint set is a superset of (or equal to)
 # the default's set — so a user can shadow `[cpu:x86_64, os:windows] →
@@ -989,6 +985,10 @@ def _merged_overrides_for_package(user_entries, default_entries):
     ]
     return user_entries + kept_defaults
 
+# Per-package output override for a generated `vcpkg_export(...)`. Mirrors
+# the `out_*` attrs on `vcpkg_export`. Multiple tags for the same
+# `(source, package)` merge into per-triplet dicts scoped by the tag's
+# `triplet` and `compilation_mode` fields.
 vcpkg_package_override = tag_class(attrs = {
     "source": attr.string(
         doc = "The name of the vcpkg.source repo these overrides apply to.",
@@ -1017,12 +1017,50 @@ vcpkg_package_override = tag_class(attrs = {
         values = ["", "dbg", "opt", "fastbuild"],
         default = "",
     ),
-    "out_static_libs": attr.string_list(default = []),
-    "out_shared_libs": attr.string_list(default = []),
-    "out_interface_libs": attr.string_list(default = []),
-    "out_binaries": attr.string_list(default = []),
-    "out_headers_only": attr.bool(default = False),
-    "defines": attr.string_list(default = []),
+    "out_static_libs": attr.string_list(
+        doc = (
+            "Basenames of the static libraries the port installs (e.g. " +
+            "`fmt`, `bz2`). Placeholder substitution applies."
+        ),
+        default = [],
+    ),
+    "out_shared_libs": attr.string_list(
+        doc = (
+            "Basenames of the shared libraries the port installs. " +
+            "Placeholder substitution applies."
+        ),
+        default = [],
+    ),
+    "out_interface_libs": attr.string_list(
+        doc = (
+            "Basenames of Windows import libraries (`.lib` files paired " +
+            "with shared `.dll`s). Placeholder substitution applies."
+        ),
+        default = [],
+    ),
+    "out_binaries": attr.string_list(
+        doc = (
+            "Basenames of tool binaries the port ships under `tools/<port>/`. " +
+            "Exposed as an output_group on the generated `vcpkg_export`. " +
+            "Placeholder substitution applies."
+        ),
+        default = [],
+    ),
+    "out_headers_only": attr.bool(
+        doc = (
+            "If True, the port ships headers only — the export produces a " +
+            "header-only `cc_library` with no linked artifacts."
+        ),
+        default = False,
+    ),
+    "defines": attr.string_list(
+        doc = (
+            "Preprocessor defines threaded onto the generated " +
+            "`cc_library`'s compilation context. Placeholder substitution " +
+            "applies."
+        ),
+        default = [],
+    ),
 })
 
 def _vcpkg_mod(module_ctx):

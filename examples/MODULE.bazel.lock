@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "x81aKh9kwYHMuLhi8FOzm9tTy1ZRhBjd5TOlNkTpzeM=",
+        "bzlTransitiveDigest": "GMcDiFBx8vZViCwd/Q+NZNTHU8fd9S/54SZplI99H84=",
         "usagesDigest": "gON8hE/b3EwG82mv7oNBdx25fS75jN/vaaGepBw9VaA=",
         "recordedFileInputs": {
           "@@//vcpkg.json": "96e20f4e748fea593b3f0513d23051dc133a14f32f302fc97024eac3d13abfdc",

@@ -756,7 +756,14 @@ _VCPKG_INSTALL_ATTRS.update({
         default = {},
         allow_files = True,
     ),
-    "manifest": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
+    "manifest": attr.label(
+        doc = (
+            "The `vcpkg.json` manifest driving the install. Typically the " +
+            "scrubbed copy produced by the module extension (with " +
+            "`builtin-baseline` and `overrides` stripped)."
+        ),
+        allow_single_file = True,
+    ),
     "vcpkg_cli": attr.label(
         doc = "The vcpkg binary used to drive `vcpkg install`.",
         allow_single_file = True,
@@ -801,8 +808,21 @@ _VCPKG_INSTALL_ATTRS.update({
             "block. Used to validate values coming from `features_flag`."
         ),
     ),
-    "root": attr.label(),  # TODO(TheGrizzlyDev): add doc
-    "root_file": attr.label(allow_single_file = True),  # TODO(TheGrizzlyDev): add doc
+    "root": attr.label(
+        doc = (
+            "Target whose default outputs are the vcpkg root's tree " +
+            "(triplets, scripts, ports, versions, …). Staged into the " +
+            "install action's sandbox as vcpkg's `VCPKG_ROOT`."
+        ),
+    ),
+    "root_file": attr.label(
+        doc = (
+            "The `.vcpkg-root` anchor file inside the vcpkg root. Its " +
+            "action-time directory is exported as `VCPKG_ROOT` to the " +
+            "install script."
+        ),
+        allow_single_file = True,
+    ),
     "triplet": attr.label(
         doc = (
             "Target providing the vcpkg triplet via VcpkgTripletInfo. " +
