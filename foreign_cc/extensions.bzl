@@ -799,7 +799,8 @@ def _vcpkg_repo_impl(repo_ctx):
                 cs = config_setting_for_triplet.get(triplet)
                 if cs == None:
                     continue
-                deps_str = ", ".join(["\":{}\"".format(d) for d in sorted(non_empty[triplet])])
+                deduped = sorted({d: True for d in non_empty[triplet]}.keys())
+                deps_str = ", ".join(["\":{}\"".format(d) for d in deduped])
                 block.append("        \"{}\": [{}],".format(cs, deps_str))
             block.append("    }),")
 
