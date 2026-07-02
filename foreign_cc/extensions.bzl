@@ -714,9 +714,6 @@ def _vcpkg_repo_impl(repo_ctx):
         install_block.append("    },")
     install_block += [")", ""]
     lines += install_block
-    # TODO(TheGrizzlyDev): allow the override schema's `deps` field to
-    # override the auto-derived vcpkg_deps_by_triplet entries for a package
-    # (manual escape hatch when the depend-info-derived graph is wrong).
     # Collect every package that appears anywhere in the resolved dep graph
     # (across any triplet), not just the top-level manifest deps. Transitive
     # vcpkg_export targets need to exist for the deps to point at them.
