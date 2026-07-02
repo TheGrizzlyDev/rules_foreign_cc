@@ -336,6 +336,53 @@ _vcpkg_git_root_repo = repository_rule(
     },
 )
 
+_VCPKG_TOOLCHAIN_HUB_BUILD_TEMPLATE = """\
+load("@rules_foreign_cc//foreign_cc:vcpkg.bzl", "vcpkg_toolchain")
+
+{impls}
+
+{toolchains}
+"""
+
+_VCPKG_TOOLCHAIN_IMPL_TEMPLATE = """\
+vcpkg_toolchain(
+    name = "{name}_impl",
+    vcpkg = "@{repo}//file",
+    visibility = ["//visibility:public"],
+)
+"""
+
+_VCPKG_TOOLCHAIN_ENTRY_TEMPLATE = """\
+toolchain(
+    name = "{name}",
+    exec_compatible_with = {constraints},
+    toolchain = ":{name}_impl",
+    toolchain_type = "@rules_foreign_cc//toolchains:vcpkg_toolchain",
+)
+"""
+
+def _vcpkg_toolchain_hub_repo_impl(repo_ctx):
+    entries = json.decode(repo_ctx.attr.entries_json)
+    impls = []
+    toolchains = []
+    for name, spec in entries.items():
+        impls.append(_VCPKG_TOOLCHAIN_IMPL_TEMPLATE.format(name = name, repo = spec["repo"]))
+        toolchains.append(_VCPKG_TOOLCHAIN_ENTRY_TEMPLATE.format(name = name, constraints = spec["constraints"]))
+    repo_ctx.file("BUILD.bazel", _VCPKG_TOOLCHAIN_HUB_BUILD_TEMPLATE.format(
+        impls = "\n".join(impls),
+        toolchains = "\n".join(toolchains),
+    ))
+
+_vcpkg_toolchain_hub_repo = repository_rule(
+    implementation = _vcpkg_toolchain_hub_repo_impl,
+    attrs = {
+        "entries_json": attr.string(
+            mandatory = True,
+            doc = "JSON-encoded dict: toolchain-name -> {repo, constraints}.",
+        ),
+    },
+)
+
 def _render_override_kwarg(override_doc):
     # Render an override doc ({"entries": [...]}) as the lines for an
     # `override_json = r"""..."""` kwarg in a vcpkg_export(...) call.
@@ -688,7 +735,6 @@ def _vcpkg_repo_impl(repo_ctx):
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
         "    manifest = \"//install:vcpkg.json\",",
-        "    vcpkg_cli = \"{}\",".format(repo_ctx.attr.vcpkg_cli),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
     if declared_features:
@@ -867,6 +913,33 @@ _DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET = {
     "vcpkg.exe": "da75e3312ff6881c89f6171363eedb92933b0f79456cd6ee636316edef860ff7",
     "vcpkg-arm64.exe": "371cf5285cc94932b97c8c0774066c90efdb50dfe606113f1686e6e99f928b08",
 }
+
+# Per-asset repo names and exec-platform constraint sets. Every entry in
+# `_DEFAULT_VCPKG_TOOL_SHA256_PER_ASSET` must have a matching entry here.
+_VCPKG_ASSET_PLATFORMS = {
+    "vcpkg-macos": struct(
+        repo = "vcpkg_cli_macos",
+        constraints = ["@platforms//os:macos"],
+    ),
+    "vcpkg-glibc": struct(
+        repo = "vcpkg_cli_linux_x86_64",
+        constraints = ["@platforms//os:linux", "@platforms//cpu:x86_64"],
+    ),
+    "vcpkg-glibc-arm64": struct(
+        repo = "vcpkg_cli_linux_arm64",
+        constraints = ["@platforms//os:linux", "@platforms//cpu:aarch64"],
+    ),
+    "vcpkg.exe": struct(
+        repo = "vcpkg_cli_windows_x86_64",
+        constraints = ["@platforms//os:windows", "@platforms//cpu:x86_64"],
+    ),
+    "vcpkg-arm64.exe": struct(
+        repo = "vcpkg_cli_windows_arm64",
+        constraints = ["@platforms//os:windows", "@platforms//cpu:aarch64"],
+    ),
+}
+
+_VCPKG_TOOLCHAIN_HUB_REPO = "vcpkg_cli_toolchains"
 
 vcpkg_tool_from_upstream_release = tag_class(attrs = {
     "version": attr.string(
@@ -1210,15 +1283,39 @@ def _vcpkg_mod(module_ctx):
             "but it is not listed in `sha256_per_asset`.".format(host_asset),
         )
 
-    cli_repo_name = "vcpkg_cli"
-    http_file(
-        name = cli_repo_name,
-        urls = [
-            "https://github.com/microsoft/vcpkg-tool/releases/download/{}/{}".format(cli_version, host_asset),
-        ],
-        sha256 = cli_shas[host_asset],
-        downloaded_file_path = "vcpkg.exe" if host_asset.endswith(".exe") else "vcpkg",
-        executable = True,
+    # One http_file per known asset that has a sha256, plus a hub repo
+    # declaring one toolchain(...) per platform. The repo/toolchain names
+    # come from `_VCPKG_ASSET_PLATFORMS`.
+    hub_entries = {}
+    host_repo_name = None
+    for asset, spec in _VCPKG_ASSET_PLATFORMS.items():
+        if asset not in cli_shas:
+            continue
+        downloaded_basename = "vcpkg.exe" if asset.endswith(".exe") else "vcpkg"
+        http_file(
+            name = spec.repo,
+            urls = [
+                "https://github.com/microsoft/vcpkg-tool/releases/download/{}/{}".format(cli_version, asset),
+            ],
+            sha256 = cli_shas[asset],
+            downloaded_file_path = downloaded_basename,
+            executable = True,
+        )
+        hub_entries[spec.repo + "_toolchain"] = {
+            "repo": spec.repo,
+            "constraints": list(spec.constraints),
+        }
+        if asset == host_asset:
+            host_repo_name = spec.repo
+
+    if host_repo_name == None:
+        fail(
+            "vcpkg: host asset '{}' has no sha256; can't wire the host repo rule.".format(host_asset),
+        )
+
+    _vcpkg_toolchain_hub_repo(
+        name = _VCPKG_TOOLCHAIN_HUB_REPO,
+        entries_json = json.encode(hub_entries),
     )
 
     # Hermetic cmake for fetch-time vcpkg invocations: reuse the same prebuilt
@@ -1339,7 +1436,7 @@ def _vcpkg_mod(module_ctx):
             # `@<repo>//file:file` is a filegroup (rejects allow_single_file); use the
             # named downloaded_file_path instead.
             vcpkg_cli_basename = "vcpkg.exe" if host_asset.endswith(".exe") else "vcpkg"
-            vcpkg_cli_label = "@{}//file:{}".format(cli_repo_name, vcpkg_cli_basename)
+            vcpkg_cli_label = "@{}//file:{}".format(host_repo_name, vcpkg_cli_basename)
             cmake_bin_label = "@{}//:bin/{}".format(cmake_for_fetch_repo, cmake_spec.bin)
             downloads_by_triplet = {}
             for triplet in target_triplets:

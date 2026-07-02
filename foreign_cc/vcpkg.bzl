@@ -4,13 +4,6 @@
 # against the docs but have not been exercised on a Windows host. Validate
 # with a Windows CI runner before claiming first-class support.
 
-# TODO(TheGrizzlyDev): the vcpkg CLI is currently surfaced as a label attr
-# (`vcpkg_cli` on vcpkg_install + label-only plumbing in repo rules). Migrate
-# to a proper Bazel toolchain (toolchain_type + register_toolchains) once we
-# have a credible cross-platform story for repo-rule consumption — `module_ctx`
-# can't resolve toolchains, so the migration needs a parallel mechanism (or a
-# fetch-time fallback) for that case.
-
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load("@bazel_skylib//rules/directory:providers.bzl", "DirectoryInfo")
@@ -45,6 +38,21 @@ load(
 )
 
 _DEFAULT_TRIPLET = Label("//foreign_cc/private/framework:vcpkg_triplet_info")
+_VCPKG_TOOLCHAIN_TYPE = Label("//toolchains:vcpkg_toolchain")
+
+def _vcpkg_toolchain_impl(ctx):
+    return [platform_common.ToolchainInfo(default_info = ctx.attr.vcpkg[DefaultInfo])]
+
+vcpkg_toolchain = rule(
+    implementation = _vcpkg_toolchain_impl,
+    attrs = {
+        "vcpkg": attr.label(
+            mandatory = True,
+            allow_files = True,
+            cfg = "exec",
+        ),
+    },
+)
 
 def _resolve_triplet(ctx):
     triplet = ctx.attr.triplet[VcpkgTripletInfo].triplet
@@ -646,9 +654,11 @@ def _vcpkg_install_impl(ctx):
     for tgt in ctx.attr.overlay_ports + ctx.attr.overlay_triplets:
         overlay_inputs += tgt[DefaultInfo].files.to_list()
 
-    vcpkg_cli = ctx.file.vcpkg_cli
-    if vcpkg_cli == None:
-        fail("vcpkg_install: `vcpkg_cli` is required (typically wired by the vcpkg module extension).")
+    toolchain = ctx.toolchains[_VCPKG_TOOLCHAIN_TYPE]
+    vcpkg_files = toolchain.default_info.files.to_list()
+    if not vcpkg_files:
+        fail("vcpkg_install: resolved vcpkg toolchain has no files.")
+    vcpkg_cli = vcpkg_files[0]
     install_cmd_lines = [
         "\"$$EXT_BUILD_ROOT$$/{}\" install \\".format(vcpkg_cli.path),
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
@@ -694,7 +704,7 @@ def _vcpkg_install_impl(ctx):
         "export VCPKG_BAZEL_ASSET_CACHE=\"$$EXT_BUILD_ROOT$$/{}/asset-cache\"".format(scratch_dir.path),
     ] + stage_lines + install_cmd_lines
 
-    declared_inputs_final = declared_inputs + download_files + [serve_script, vcpkg_cli] + overlay_inputs
+    declared_inputs_final = declared_inputs + download_files + [serve_script] + vcpkg_files + overlay_inputs
     if config_file != None:
         declared_inputs_final = declared_inputs_final + [config_file]
     if ctx.attr.config_data != None:
@@ -759,11 +769,6 @@ _VCPKG_INSTALL_ATTRS.update({
             "`builtin-baseline` and `overrides` stripped)."
         ),
         allow_single_file = True,
-    ),
-    "vcpkg_cli": attr.label(
-        doc = "The vcpkg binary used to drive `vcpkg install`.",
-        allow_single_file = True,
-        cfg = "exec",
     ),
     "vcpkg_configuration": attr.label(
         doc = (
@@ -846,6 +851,7 @@ vcpkg_install = rule(
         "@rules_foreign_cc//toolchains:autoconf_toolchain",
         "@rules_foreign_cc//toolchains:automake_toolchain",
         "@rules_foreign_cc//toolchains:pkgconfig_toolchain",
+        "@rules_foreign_cc//toolchains:vcpkg_toolchain",
         "@rules_foreign_cc//foreign_cc/private/framework:shell_toolchain",
     ],
 )

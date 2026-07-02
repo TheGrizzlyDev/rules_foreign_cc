@@ -54,10 +54,14 @@ use_repo(
     "rules_foreign_cc_framework_toolchains",
 )
 
+vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
+use_repo(vcpkg, "vcpkg_cli_toolchains")
+
 register_toolchains(
     "@rules_foreign_cc_framework_toolchains//:all",
     "@cmake_3.31.12_toolchains//:all",
     "@ninja_1.13.2_toolchains//:all",
     "@python_3_12//:all",
     "@rules_foreign_cc//toolchains:all",
+    "@vcpkg_cli_toolchains//:all",
 )
