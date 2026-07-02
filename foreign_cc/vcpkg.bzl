@@ -668,12 +668,12 @@ def _vcpkg_install_impl(ctx):
     else:
         asset_sources = "x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}".format(serve_script.path)
     install_cmd_lines = [
-        "\"$$EXT_BUILD_ROOT$$/{}\" install \\".format(vcpkg_cli.path),
+        "\"$SHORT/vcpkg\" install \\",
         "  --x-manifest-root=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(ctx.file.manifest.dirname),
-        "  --x-install-root=\"$$INSTALLDIR$$\" \\",
-        "  --x-buildtrees-root=\"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \\".format(scratch_dir.path),
-        "  --x-packages-root=\"$$EXT_BUILD_ROOT$$/{}/packages\" \\".format(scratch_dir.path),
-        "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
+        "  --x-install-root=\"$SHORT/install\" \\",
+        "  --x-buildtrees-root=\"$SHORT/buildtrees\" \\",
+        "  --x-packages-root=\"$SHORT/packages\" \\",
+        "  --downloads-root=\"$SHORT/downloads\" \\",
         "  --x-asset-sources=\"{}\" \\".format(asset_sources),
     ]
     # When a vcpkg_configuration is set, vcpkg auto-loads its overlays;
@@ -702,10 +702,28 @@ def _vcpkg_install_impl(ctx):
         install_cmd_lines.append("  --x-feature={} \\".format(feat))
     install_cmd_lines.append("  --triplet={}".format(triplet))
 
+    # vcpkg port helpers (e.g. `x_vcpkg_get_python_packages`) build CMake
+    # regexes by interpolating the install-tree/downloads paths and then
+    # matching them against other paths. Bazel's canonical repo names
+    # (`rules_foreign_cc++vcpkg+…`) contain literal `+` characters, which
+    # CMake reads as regex meta and rejects with `Nested *?+`. Shortcut
+    # around it by symlinking every Bazel-owned path we hand to vcpkg
+    # into a per-target `$SHORT` directory under $TMPDIR that has no `+`
+    # in its name. Files land in the real Bazel outputs via the symlink;
+    # cmake sees a `+`-free string.
     user_script_lines = [
         "mkdir -p \"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
-        "export VCPKG_ROOT=\"$$EXT_BUILD_ROOT$$/{}\"".format(ctx.file.root_file.dirname),
+        "SHORT=\"$(mktemp -d /tmp/rfcc-vcpkg-XXXXXX)\"",
+        "trap 'rm -rf \"$SHORT\"' EXIT",
+        "ln -s \"$$EXT_BUILD_ROOT$$/{}\" \"$SHORT/root\"".format(ctx.file.root_file.dirname),
+        "ln -s \"$$INSTALLDIR$$\" \"$SHORT/install\"",
+        "mkdir -p \"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \"$$EXT_BUILD_ROOT$$/{}/packages\" \"$$EXT_BUILD_ROOT$$/{}/downloads\"".format(scratch_dir.path, scratch_dir.path, scratch_dir.path),
+        "ln -s \"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \"$SHORT/buildtrees\"".format(scratch_dir.path),
+        "ln -s \"$$EXT_BUILD_ROOT$$/{}/packages\" \"$SHORT/packages\"".format(scratch_dir.path),
+        "ln -s \"$$EXT_BUILD_ROOT$$/{}/downloads\" \"$SHORT/downloads\"".format(scratch_dir.path),
+        "ln -s \"$$EXT_BUILD_ROOT$$/{}\" \"$SHORT/vcpkg\"".format(vcpkg_cli.path),
+        "export VCPKG_ROOT=\"$SHORT/root\"",
         # Force vcpkg to use cmake/ninja/etc from PATH instead of downloading
         # its own into the downloads/ cache.
         "export VCPKG_FORCE_SYSTEM_BINARIES=1",
