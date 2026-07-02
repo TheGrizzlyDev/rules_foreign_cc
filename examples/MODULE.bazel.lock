@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "DpdWAo14ymvuQyJd9JBmyeXcXEn0MhtI77rjIjMPUqE=",
+        "bzlTransitiveDigest": "ZZWe3fsYfZ9NJAfqsgoeT/z6ssHb3PInmiqgHGoC20c=",
         "usagesDigest": "F+jC7fKuRr/B91UnhFw1TsywJ330ak5zVRE5QjI9rUM=",
         "recordedFileInputs": {
           "@@//vcpkg.json": "96e20f4e748fea593b3f0513d23051dc133a14f32f302fc97024eac3d13abfdc",
@@ -548,6 +548,7 @@
               "remote": "https://github.com/microsoft/vcpkg",
               "ref": "e8709ee8703328fe121eab33cda73a406a7626b7",
               "ref_kind": "commit",
+              "depth": 1,
               "shallow_since": "",
               "init_submodules": false,
               "recursive_init_submodules": true

@@ -298,11 +298,15 @@ def _vcpkg_git_root_repo_impl(repo_ctx):
 
     _git(["init", "--quiet"])
     _git(["remote", "add", "origin", remote])
+    # Default is a shallow (--depth=1) fetch. Manifests using `overrides`
+    # to pin historical port versions need to widen `depth` (or set it to
+    # 0 for a full clone) so vcpkg can resolve the referenced tree blobs.
+    depth = repo_ctx.attr.depth
     fetch_args = ["fetch", "--quiet"]
     if shallow_since:
         fetch_args += ["--shallow-since={}".format(shallow_since)]
-    elif ref_kind == "commit":
-        fetch_args += ["--depth=1"]
+    elif depth > 0:
+        fetch_args += ["--depth={}".format(depth)]
     fetch_args += ["origin", ref]
     _git(fetch_args)
 
@@ -330,6 +334,7 @@ _vcpkg_git_root_repo = repository_rule(
             mandatory = True,
             values = ["commit", "tag", "branch"],
         ),
+        "depth": attr.int(default = 1),
         "shallow_since": attr.string(),
         "init_submodules": attr.bool(default = False),
         "recursive_init_submodules": attr.bool(default = True),
@@ -892,10 +897,21 @@ vcpkg_root_git_repository = tag_class(attrs = {
             "run; prefer `fallback_commit` for reproducibility."
         ),
     ),
+    "depth": attr.int(
+        default = 1,
+        doc = (
+            "History depth for the git fetch. Default is 1 (shallow). Set " +
+            "to 0 for a full clone, or a positive value for a wider " +
+            "shallow window. Manifests using `overrides` to pin historical " +
+            "port versions typically need `depth = 0` so vcpkg can resolve " +
+            "the referenced tree blobs."
+        ),
+    ),
     "shallow_since": attr.string(
         doc = (
             "Optional `shallow_since` passed through to the synthesised " +
-            "git_repository. Trades fetch size for reachability."
+            "git_repository. Trades fetch size for reachability. If set, " +
+            "takes precedence over `depth`."
         ),
     ),
     "init_submodules": attr.bool(default = False),
@@ -1173,6 +1189,7 @@ def _vcpkg_mod(module_ctx):
                 fallback_commit = root_tag.fallback_commit,
                 fallback_tag = root_tag.fallback_tag,
                 fallback_branch = root_tag.fallback_branch,
+                depth = root_tag.depth,
                 shallow_since = root_tag.shallow_since,
                 init_submodules = root_tag.init_submodules,
                 recursive_init_submodules = root_tag.recursive_init_submodules,
@@ -1244,6 +1261,7 @@ def _vcpkg_mod(module_ctx):
                 remote = tpl.remote,
                 ref = ref,
                 ref_kind = ref_kind,
+                depth = tpl.depth,
                 shallow_since = tpl.shallow_since,
                 init_submodules = tpl.init_submodules,
                 recursive_init_submodules = tpl.recursive_init_submodules,
