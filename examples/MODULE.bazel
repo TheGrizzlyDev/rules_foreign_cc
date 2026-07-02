@@ -193,4 +193,20 @@ vcpkg.package_override(
     out_binaries = ["greet"],
 )
 
-use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps")
+# Exercises `vcpkg.root_git_repository` end-to-end: the manifest declares
+# `builtin-baseline`, and the extension synthesises a git_repository pinned
+# at that commit so vcpkg's working tree contains the right
+# `versions/baseline.json`. No ref is needed on the root tag itself; the
+# baseline alone drives the fetch.
+vcpkg.root_git_repository(
+    name = "vcpkg_git_root",
+    remote = "https://github.com/microsoft/vcpkg",
+)
+
+vcpkg.source(
+    name = "vcpkg_root_git_deps",
+    manifest = "//vcpkg_root_git:vcpkg.json",
+    root = "vcpkg_git_root",
+)
+
+use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps", "vcpkg_root_git_deps")

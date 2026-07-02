@@ -83,6 +83,17 @@ def _overlay_dir_for_label(ctx, label):
     """
     return ctx.path(label).dirname
 
+def _manifest_baseline(ctx, manifest_label):
+    """Return the manifest's `builtin-baseline` field, or None if absent."""
+    return json.decode(ctx.read(ctx.path(manifest_label))).get("builtin-baseline")
+
+def _sanitise_ref(ref):
+    """Make `ref` safe to embed in a Bazel workspace name."""
+    out = ""
+    for ch in ref.elems():
+        out += ch if (ch.isalnum() or ch == "_") else "_"
+    return out
+
 def _watch_tree(ctx, path):
     """Recursively `ctx.watch` every file under `path` so changes inside an
     overlay invalidate the calling repo or module extension. `path` must be
@@ -103,6 +114,16 @@ def _watch_tree(ctx, path):
                 stack.append(entry)
             else:
                 ctx.watch(entry)
+
+VCPKG_ROOT_BUILD_FILE = """
+exports_files([".vcpkg-root"])
+
+filegroup(
+    name = "srcs",
+    srcs = glob(["**/*"]),
+    visibility = ["//visibility:public"],
+)
+""".strip()
 
 # Capture script invoked by vcpkg's x-script asset source. vcpkg passes
 # {sha512} {url} {dst} positional args. We append `<sha512>\t<integrity>\t<url>`
@@ -249,6 +270,66 @@ _vcpkg_capture_repo = repository_rule(
     },
 )
 
+def _vcpkg_git_root_repo_impl(repo_ctx):
+    # Unlike Bazel's `git_repository`, keep `.git/` intact so
+    # `_vcpkg_repo_impl` can run `git show <baseline>:versions/baseline.json`
+    # against it at depend-info time.
+    remote = repo_ctx.attr.remote
+    ref = repo_ctx.attr.ref
+    ref_kind = repo_ctx.attr.ref_kind
+    shallow_since = repo_ctx.attr.shallow_since
+    init_submodules = repo_ctx.attr.init_submodules
+    recursive = repo_ctx.attr.recursive_init_submodules
+
+    target = repo_ctx.path(".")
+    def _git(args, check = True):
+        result = repo_ctx.execute(["git"] + args, working_directory = str(target))
+        if check and result.return_code != 0:
+            fail("vcpkg root git clone: `git {}` failed ({}):\nstderr:\n{}\nstdout:\n{}".format(
+                " ".join(args), result.return_code, result.stderr, result.stdout,
+            ))
+        return result
+
+    _git(["init", "--quiet"])
+    _git(["remote", "add", "origin", remote])
+    fetch_args = ["fetch", "--quiet"]
+    if shallow_since:
+        fetch_args += ["--shallow-since={}".format(shallow_since)]
+    elif ref_kind == "commit":
+        fetch_args += ["--depth=1"]
+    fetch_args += ["origin", ref]
+    _git(fetch_args)
+
+    if ref_kind == "commit":
+        _git(["checkout", "--quiet", ref])
+    else:
+        _git(["checkout", "--quiet", "FETCH_HEAD"])
+
+    if init_submodules:
+        sub_args = ["submodule", "update", "--init"]
+        if recursive:
+            sub_args += ["--recursive"]
+        _git(sub_args)
+
+    repo_ctx.file("BUILD.bazel", VCPKG_ROOT_BUILD_FILE)
+    if not repo_ctx.path(".vcpkg-root").exists:
+        repo_ctx.file(".vcpkg-root", "")
+
+_vcpkg_git_root_repo = repository_rule(
+    implementation = _vcpkg_git_root_repo_impl,
+    attrs = {
+        "remote": attr.string(mandatory = True),
+        "ref": attr.string(mandatory = True),
+        "ref_kind": attr.string(
+            mandatory = True,
+            values = ["commit", "tag", "branch"],
+        ),
+        "shallow_since": attr.string(),
+        "init_submodules": attr.bool(default = False),
+        "recursive_init_submodules": attr.bool(default = True),
+    },
+)
+
 def _render_override_kwarg(override_doc):
     # Render an override doc ({"entries": [...]}) as the lines for an
     # `override_json = r"""..."""` kwarg in a vcpkg_export(...) call.
@@ -317,13 +398,55 @@ def _vcpkg_repo_impl(repo_ctx):
     repo_ctx.watch(manifest_path)
     manifest = json.decode(repo_ctx.read(manifest_path))
     packages = []
-    # TODO(TheGrizzlyDev): handle the manifest's `builtin-baseline`. Today
-    # it's ignored.
+
+    # NOTE: `builtin-baseline` is handled upstream in `_vcpkg_mod`: when
+    # the source's manifest carries one, we synthesise a git_repository
+    # pinned at that commit and route this source at it. So by the time
+    # we get here, the on-disk root's working tree already matches the
+    # baseline — no reachability probe needed.
+
+    # TODO(TheGrizzlyDev): vcpkg-configuration.json's own `overlay-ports`
+    # entry is silently ignored — we only honour `vcpkg.source(overlay_ports
+    # = …)`. Either parse the config and merge its overlays in, or fail
+    # loudly when both are set.
+    # TODO(TheGrizzlyDev): `kind: "artifact"` registries in
+    # vcpkg-configuration.json (vcpkg-ce) aren't supported; they'd need
+    # network fetch wired through repo_ctx.download instead of vcpkg's own
+    # downloader. For now we just pass the file through and hope vcpkg
+    # ignores artifact registries for the deps we care about.
+    # TODO(TheGrizzlyDev): vcpkg.json `features` (e.g. `gtk`, `qt`) and
+    # per-platform `default-features` aren't exposed in the module
+    # extension API — `vcpkg.source` has no `features` attribute. Tracked
+    # alongside #40.
     for dep in manifest.get("dependencies", []):
         if type(dep) == "string":
             packages.append(dep)
         else:
             packages.append(dep["name"])
+
+    # Write a scrubbed manifest for the install action: strip
+    # `builtin-baseline`/`overrides`, both of which make vcpkg run
+    # `git show <sha>:versions/…` against the root's `.git/`. Bazel
+    # materialises action inputs as symlinks and git rejects a symlinked
+    # `.git/HEAD`, so the install-time git lookup would fail. Depend-info
+    # (above) has already consumed both fields, so the resolved graph is
+    # unchanged; empirically install output matches the baseline-honoured
+    # run when the root's working tree is at the baseline commit.
+    scrubbed_manifest = {k: v for k, v in manifest.items() if k not in ("builtin-baseline", "overrides")}
+    repo_ctx.file("install/vcpkg.json", json.encode_indent(scrubbed_manifest, indent = "  "))
+
+    have_scrubbed_config = False
+    if repo_ctx.attr.vcpkg_configuration:
+        config_path = repo_ctx.path(repo_ctx.attr.vcpkg_configuration)
+        config = json.decode(repo_ctx.read(config_path))
+        def _strip_baseline(reg):
+            return {k: v for k, v in reg.items() if k != "baseline"}
+        if "default-registry" in config and type(config["default-registry"]) == "dict":
+            config["default-registry"] = _strip_baseline(config["default-registry"])
+        if "registries" in config:
+            config["registries"] = [_strip_baseline(r) for r in config["registries"]]
+        repo_ctx.file("install/vcpkg-configuration.json", json.encode_indent(config, indent = "  "))
+        have_scrubbed_config = True
 
     overrides_by_pkg = json.decode(repo_ctx.attr.overrides_json)
 
@@ -452,6 +575,15 @@ def _vcpkg_repo_impl(repo_ctx):
         "",
     ]
 
+    # Nested BUILD so vcpkg_install can reference the scrubbed manifest
+    # (and optional config) via a label pointing at the `install/` subdir.
+    install_exports = ["vcpkg.json"]
+    if have_scrubbed_config:
+        install_exports.append("vcpkg-configuration.json")
+    repo_ctx.file(
+        "install/BUILD.bazel",
+        "exports_files({})\n".format(install_exports),
+    )
     lines = [
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
         "load(\"@rules_foreign_cc//foreign_cc/private/framework:platform.bzl\", \"vcpkg_triplet_info_from_mappings\")",
@@ -464,12 +596,12 @@ def _vcpkg_repo_impl(repo_ctx):
         "    name = \"{}\",".format(vcpkg_install_target_name),
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
-        "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
+        "    manifest = \"//install:vcpkg.json\",",
         "    vcpkg_cli = \"{}\",".format(repo_ctx.attr.vcpkg_cli),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
-    if repo_ctx.attr.vcpkg_configuration:
-        install_block.append("    vcpkg_configuration = \"{}\",".format(repo_ctx.attr.vcpkg_configuration))
+    if have_scrubbed_config:
+        install_block.append("    vcpkg_configuration = \"//install:vcpkg-configuration.json\",")
     if repo_ctx.attr.overlay_ports:
         install_block.append("    overlay_ports = [")
         for lbl in repo_ctx.attr.overlay_ports:
@@ -571,10 +703,65 @@ vcpkg_repo = repository_rule(
 DEFAULT_VCPKG_ROOT_WORKSPACE_NAME = "default_vcpkg_root"
 
 vcpkg_root_http_archive = tag_class(attrs = {
-    "name": attr.string(default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME), # TODO(TheGrizzlyDev): add doc
-    "urls": attr.string_list(mandatory = True), # TODO(TheGrizzlyDev): add doc
-    "sha256": attr.string(), # TODO(TheGrizzlyDev): add doc
-    "strip_prefix": attr.string(), # TODO(TheGrizzlyDev): add doc
+    "name": attr.string(
+        default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME,
+        doc = (
+            "Logical name for this root. Referenced by " +
+            "`vcpkg.source(root = ...)`. Defaults to the built-in default " +
+            "root name so a manifest can use it without an explicit `root`."
+        ),
+    ),
+    "urls": attr.string_list(
+        mandatory = True,
+        doc = "Mirror URLs passed verbatim to http_archive.",
+    ),
+    "sha256": attr.string(
+        doc = "Tarball sha256 passed verbatim to http_archive.",
+    ),
+    "strip_prefix": attr.string(
+        doc = "strip_prefix passed verbatim to http_archive.",
+    ),
+})
+
+# A source's manifest baseline (when present) picks the fetched ref;
+# otherwise one of the `fallback_*` fields is used.
+vcpkg_root_git_repository = tag_class(attrs = {
+    "name": attr.string(
+        default = DEFAULT_VCPKG_ROOT_WORKSPACE_NAME,
+        doc = (
+            "Logical name for this root. Referenced by " +
+            "`vcpkg.source(root = ...)`."
+        ),
+    ),
+    "remote": attr.string(
+        mandatory = True,
+        doc = "Git remote URL (e.g. https://github.com/microsoft/vcpkg).",
+    ),
+    "fallback_commit": attr.string(
+        doc = (
+            "Commit sha used when the consuming source's manifest does not " +
+            "declare `builtin-baseline`. One of `fallback_commit`, " +
+            "`fallback_tag`, or `fallback_branch` should be set when " +
+            "baseline-less manifests will use this root."
+        ),
+    ),
+    "fallback_tag": attr.string(
+        doc = "Like `fallback_commit`, but a tag name.",
+    ),
+    "fallback_branch": attr.string(
+        doc = (
+            "Like `fallback_commit`, but a branch name. Refetched on every " +
+            "run; prefer `fallback_commit` for reproducibility."
+        ),
+    ),
+    "shallow_since": attr.string(
+        doc = (
+            "Optional `shallow_since` passed through to the synthesised " +
+            "git_repository. Trades fetch size for reachability."
+        ),
+    ),
+    "init_submodules": attr.bool(default = False),
+    "recursive_init_submodules": attr.bool(default = True),
 })
 
 # Asset filenames published by github.com/microsoft/vcpkg-tool releases.
@@ -746,47 +933,119 @@ vcpkg_package_override = tag_class(attrs = {
     "defines": attr.string_list(default = []),
 })
 
-VCPKG_ROOT_BUILD_FILE = """
-exports_files([".vcpkg-root"])
-
-filegroup(
-    name = "srcs", 
-    srcs=glob(["**/*"]),
-    visibility = ["//visibility:public"],
-)
-""".strip()
-
 def _vcpkg_mod(module_ctx):
-    default_root_configured = False
+    # A tag becomes a template; each source resolves it to a concrete repo.
+    # http_archive templates fetch once; git templates fan out per unique ref.
+    http_templates = {}
+    git_templates = {}
 
-    vcpkg_repo_name = lambda name: "vcpkg_root_%s" % (name)
+    def _check_template_collision(name, new):
+        existing = http_templates.get(name) or git_templates.get(name)
+        if existing == None:
+            return
+        if existing != new:
+            fail(
+                ("vcpkg: root '{}' is declared more than once with " +
+                 "different parameters. First declaration: {}. " +
+                 "Conflicting declaration: {}.").format(name, existing, new),
+            )
 
-    # TODO(TheGrizzlyDev): pin the root per vcpkg.source. Today repeated tags
-    # with the same `name` silently produce an http_archive collision, and
-    # vcpkg.source has no way to scope a root to itself. Either fail loud on
-    # duplicates or thread an explicit root selection through each source.
     for mod in module_ctx.modules:
-        for root_tag in mod.tags.vcpkg_root_http_archive:
+        for root_tag in mod.tags.root_http_archive:
             name = root_tag.name
-            if name == DEFAULT_VCPKG_ROOT_WORKSPACE_NAME:
-                default_root_configured = True
-
-            http_archive(
-                name = vcpkg_repo_name(name),
-                urls = root_tag.urls,
+            params = struct(
+                kind = "http_archive",
+                urls = tuple(root_tag.urls),
                 sha256 = root_tag.sha256,
                 strip_prefix = root_tag.strip_prefix,
-                build_file_content = VCPKG_ROOT_BUILD_FILE,
             )
-            
-    if not default_root_configured:
-        http_archive(
-            name = vcpkg_repo_name(DEFAULT_VCPKG_ROOT_WORKSPACE_NAME),
-            urls = ["https://github.com/microsoft/vcpkg/archive/refs/tags/2026.06.01.tar.gz"],
-            strip_prefix = "vcpkg-2026.06.01",
+            _check_template_collision(name, params)
+            http_templates[name] = params
+
+        for root_tag in mod.tags.root_git_repository:
+            name = root_tag.name
+            params = struct(
+                kind = "git_repository",
+                remote = root_tag.remote,
+                fallback_commit = root_tag.fallback_commit,
+                fallback_tag = root_tag.fallback_tag,
+                fallback_branch = root_tag.fallback_branch,
+                shallow_since = root_tag.shallow_since,
+                init_submodules = root_tag.init_submodules,
+                recursive_init_submodules = root_tag.recursive_init_submodules,
+            )
+            _check_template_collision(name, params)
+            git_templates[name] = params
+
+    if DEFAULT_VCPKG_ROOT_WORKSPACE_NAME not in http_templates and DEFAULT_VCPKG_ROOT_WORKSPACE_NAME not in git_templates:
+        http_templates[DEFAULT_VCPKG_ROOT_WORKSPACE_NAME] = struct(
+            kind = "http_archive",
+            urls = ("https://github.com/microsoft/vcpkg/archive/refs/tags/2026.06.01.tar.gz",),
             sha256 = "d394626f9205790915c70e1281eb08554e8d72ac0677334893e32636ae08ec3d",
+            strip_prefix = "vcpkg-2026.06.01",
+        )
+
+    for name, params in http_templates.items():
+        http_archive(
+            name = "vcpkg_root_%s" % name,
+            urls = list(params.urls),
+            sha256 = params.sha256,
+            strip_prefix = params.strip_prefix,
             build_file_content = VCPKG_ROOT_BUILD_FILE,
         )
+
+    git_synth_declared = {}
+
+    def _resolve_root_for_source(source_name, source_root, baseline):
+        if source_root in http_templates:
+            if baseline != None:
+                tpl = http_templates[source_root]
+                fail(
+                    ("vcpkg.source '{src}': manifest declares " +
+                     "`builtin-baseline = \"{bl}\"`, but the selected root " +
+                     "'{rt}' is a `root_http_archive` (urls={urls}). " +
+                     "`http_archive` strips git metadata, so vcpkg can't " +
+                     "read `versions/baseline.json` at that commit. " +
+                     "Either remove `builtin-baseline` from the manifest, " +
+                     "or declare the root via `vcpkg.root_git_repository`.").format(
+                        src = source_name, bl = baseline, rt = source_root,
+                        urls = list(tpl.urls),
+                    ),
+                )
+            return "vcpkg_root_%s" % source_root
+
+        tpl = git_templates[source_root]
+        if baseline != None:
+            ref, ref_kind = baseline, "commit"
+        elif tpl.fallback_commit:
+            ref, ref_kind = tpl.fallback_commit, "commit"
+        elif tpl.fallback_tag:
+            ref, ref_kind = tpl.fallback_tag, "tag"
+        elif tpl.fallback_branch:
+            ref, ref_kind = tpl.fallback_branch, "branch"
+        else:
+            fail(
+                ("vcpkg.source '{src}': manifest has no " +
+                 "`builtin-baseline` and the selected root '{rt}' has " +
+                 "no `fallback_commit`, `fallback_tag`, or " +
+                 "`fallback_branch`. Set one of those on the root tag " +
+                 "or add a baseline to the manifest.").format(
+                    src = source_name, rt = source_root,
+                ),
+            )
+        repo_name = "vcpkg_root_{}__{}".format(source_root, _sanitise_ref(ref))
+        if repo_name not in git_synth_declared:
+            git_synth_declared[repo_name] = True
+            _vcpkg_git_root_repo(
+                name = repo_name,
+                remote = tpl.remote,
+                ref = ref,
+                ref_kind = ref_kind,
+                shallow_since = tpl.shallow_since,
+                init_submodules = tpl.init_submodules,
+                recursive_init_submodules = tpl.recursive_init_submodules,
+            )
+        return repo_name
 
     # Collect the (single) vcpkg.tool_from_upstream_release tag. Multiple tags
     # would be ambiguous, so fail if we see more than one.
@@ -926,6 +1185,16 @@ def _vcpkg_mod(module_ctx):
 
     for mod in module_ctx.modules:
         for source in mod.tags.source:
+            if source.root not in http_templates and source.root not in git_templates:
+                fail(
+                    ("vcpkg.source '{}' references root '{}', which is not " +
+                     "declared. Declare it via `vcpkg.root_http_archive` or " +
+                     "`vcpkg.root_git_repository` in this module.").format(
+                        source.name, source.root,
+                    ),
+                )
+            baseline = _manifest_baseline(module_ctx, source.manifest)
+            resolved_root_repo = _resolve_root_for_source(source.name, source.root, baseline)
             by_pkg = overrides_by_source.get(source.name, {})
             applicable = {}
             packages = sorted({p: True for p in (list(by_pkg.keys()) + list(defaults_by_package.keys()))}.keys())
@@ -936,13 +1205,9 @@ def _vcpkg_mod(module_ctx):
                 if merged:
                     applicable[pkg] = {"entries": merged}
 
-            # Declare one capture repo per (source, triplet). Each runs vcpkg
-            # to enumerate the assets for its triplet and downloads them via
-            # repo_ctx.download into downloads/<sha512>. The repo exposes a
-            # single `:all` filegroup that vcpkg_install consumes.
-            # http_file creates `@<repo>//file:<downloaded_file_path>` as the
-            # actual file label (the canonical `@<repo>//file:file` is a
-            # filegroup wrapping it, which can't be used with allow_single_file).
+            # One capture repo per (source, triplet). Exposes `:all` for vcpkg_install.
+            # `@<repo>//file:file` is a filegroup (rejects allow_single_file); use the
+            # named downloaded_file_path instead.
             vcpkg_cli_basename = "vcpkg.exe" if host_asset.endswith(".exe") else "vcpkg"
             vcpkg_cli_label = "@{}//file:{}".format(cli_repo_name, vcpkg_cli_basename)
             cmake_bin_label = "@{}//:bin/{}".format(cmake_for_fetch_repo, cmake_spec.bin)
@@ -956,7 +1221,7 @@ def _vcpkg_mod(module_ctx):
                     overlay_ports = source.overlay_ports,
                     overlay_triplets = source.overlay_triplets,
                     triplet = triplet,
-                    vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
+                    vcpkg_root_marker = "@{}//:.vcpkg-root".format(resolved_root_repo),
                     vcpkg_cli = vcpkg_cli_label,
                     cmake_bin = cmake_bin_label,
                 )
@@ -968,8 +1233,8 @@ def _vcpkg_mod(module_ctx):
                 vcpkg_configuration = source.vcpkg_configuration,
                 overlay_ports = source.overlay_ports,
                 overlay_triplets = source.overlay_triplets,
-                vcpkg_root = vcpkg_repo_name(source.root),
-                vcpkg_root_marker = "@{}//:.vcpkg-root".format(vcpkg_repo_name(source.root)),
+                vcpkg_root = resolved_root_repo,
+                vcpkg_root_marker = "@{}//:.vcpkg-root".format(resolved_root_repo),
                 overrides_json = json.encode(applicable),
                 triplet_mappings_json = json.encode(triplet_mappings),
                 downloads_by_triplet_json = json.encode(downloads_by_triplet),
@@ -982,7 +1247,8 @@ def _vcpkg_mod(module_ctx):
 vcpkg = module_extension(
     implementation = _vcpkg_mod,
     tag_classes = {
-        "vcpkg_root_http_archive": vcpkg_root_http_archive,
+        "root_http_archive": vcpkg_root_http_archive,
+        "root_git_repository": vcpkg_root_git_repository,
         "tool_from_upstream_release": vcpkg_tool_from_upstream_release,
         "source": vcpkg_source,
         "package_override": vcpkg_package_override,

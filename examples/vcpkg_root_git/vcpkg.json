@@ -1,0 +1,6 @@
+{
+  "name": "vcpkg-root-git-example",
+  "version-string": "0.0.0",
+  "builtin-baseline": "e8709ee8703328fe121eab33cda73a406a7626b7",
+  "dependencies": ["fmt"]
+}
