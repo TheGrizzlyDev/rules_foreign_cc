@@ -707,8 +707,6 @@ def _vcpkg_install_impl(ctx):
     declared_inputs_final = declared_inputs + download_files + [serve_script] + vcpkg_files + overlay_inputs
     if config_file != None:
         declared_inputs_final = declared_inputs_final + [config_file]
-    if ctx.attr.config_data != None:
-        declared_inputs_final = declared_inputs_final + ctx.attr.config_data[DefaultInfo].files.to_list()
     inputs = InputFiles(
         headers = [],
         include_dirs = [],
@@ -731,6 +729,12 @@ def _vcpkg_install_impl(ctx):
         data_dependencies = ctx.attr.data + ctx.attr.build_data + ctx.attr.toolchains,
         tools_env = tools_env,
         block_network = True,
+        # vcpkg needs to invoke `git show` against the .git/ inside the
+        # root when the manifest carries `builtin-baseline`/`overrides`.
+        # Bazel's sandbox materialises action inputs as symlinks under
+        # execroot layout that git rejects; opt out so the action sees
+        # the on-disk repo directly.
+        extra_execution_requirements = {"no-sandbox": "1"},
     )
 
     return [DefaultInfo(files = depset([install_tree]))]
@@ -783,16 +787,6 @@ _VCPKG_INSTALL_ATTRS.update({
     ),
     "overlay_triplets": attr.label_list(
         doc = "Directories passed to vcpkg as --overlay-triplets.",
-        allow_files = True,
-    ),
-    "config_data": attr.label(
-        doc = (
-            "Optional filegroup of extra files that live in the same " +
-            "directory as `vcpkg_configuration` (e.g. overlay-port trees " +
-            "referenced by relative paths in the config). Staged into the " +
-            "install action's sandbox so vcpkg resolves the config's " +
-            "relative paths correctly."
-        ),
         allow_files = True,
     ),
     "features_flag": attr.label(

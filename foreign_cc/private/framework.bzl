@@ -455,7 +455,8 @@ def foreign_cc_install_action(
         legacy_tools_targets = [],
         header = None,
         block_network = None,
-        progress_message = None):
+        progress_message = None,
+        extra_execution_requirements = {}):
     """Run a foreign_cc install shell action.
 
     Sets up the standard rules_foreign_cc sandbox (EXT_BUILD_ROOT, INSTALLDIR,
@@ -549,6 +550,7 @@ def foreign_cc_install_action(
     cc_toolchain = find_cpp_toolchain(ctx)
 
     execution_requirements = {tag: "" for tag in ctx.attr.tags}
+    execution_requirements.update(extra_execution_requirements)
     if block_network == None:
         block_network = "requires-network" not in execution_requirements
     if block_network:

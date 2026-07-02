@@ -476,17 +476,6 @@ def _vcpkg_repo_impl(repo_ctx):
     # the `:features` string_list_flag we emit into the generated BUILD.
     declared_features = sorted(manifest.get("features", {}).keys())
 
-    # Write a scrubbed manifest for the install action: strip
-    # `builtin-baseline`/`overrides`, both of which make vcpkg run
-    # `git show <sha>:versions/…` against the root's `.git/`. Bazel
-    # materialises action inputs as symlinks and git rejects a symlinked
-    # `.git/HEAD`, so the install-time git lookup would fail. Depend-info
-    # (above) has already consumed both fields, so the resolved graph is
-    # unchanged; empirically install output matches the baseline-honoured
-    # run when the root's working tree is at the baseline commit.
-    scrubbed_manifest = {k: v for k, v in manifest.items() if k not in ("builtin-baseline", "overrides")}
-    repo_ctx.file("install/vcpkg.json", json.encode_indent(scrubbed_manifest, indent = "  "))
-
     have_scrubbed_config = False
     if repo_ctx.attr.vcpkg_configuration:
         config_path = repo_ctx.path(repo_ctx.attr.vcpkg_configuration)
@@ -513,17 +502,9 @@ def _vcpkg_repo_impl(repo_ctx):
         for idx, reg in enumerate(config.get("registries", []) or []):
             _reject_artifact(reg, "registries[{}]".format(idx))
 
-        def _strip_baseline(reg):
-            return {k: v for k, v in reg.items() if k != "baseline"}
-        if "default-registry" in config and type(config["default-registry"]) == "dict":
-            config["default-registry"] = _strip_baseline(config["default-registry"])
-        if "registries" in config:
-            config["registries"] = [_strip_baseline(r) for r in config["registries"]]
-
-        # `overlay-ports` / `overlay-triplets` entries in the config are
-        # relative to the config file's directory. Copy the referenced
-        # trees into `install/<same-relative-path>` so vcpkg-in-sandbox
-        # resolves them relative to the scrubbed config identically.
+        # Watch overlay-ports / overlay-triplets trees so edits invalidate
+        # the repo. Paths are relative to the config file; the install
+        # action runs no-sandbox so it can see them at their real location.
         for field in ("overlay-ports", "overlay-triplets"):
             for entry in config.get(field, []) or []:
                 if type(entry) != "string":
@@ -533,10 +514,9 @@ def _vcpkg_repo_impl(repo_ctx):
                 if entry.startswith("/"):
                     fail(
                         ("vcpkg.source '{src}': vcpkg-configuration.json's " +
-                         "{field} contains an absolute path {entry}. " +
-                         "Absolute paths aren't hermetic across the Bazel " +
-                         "sandbox; use a relative path (resolved against " +
-                         "the config file's directory).").format(
+                         "{field} contains an absolute path {entry}. Use a " +
+                         "relative path (resolved against the config file's " +
+                         "directory).").format(
                             src = repo_ctx.name, field = field, entry = entry,
                         ),
                     )
@@ -551,14 +531,7 @@ def _vcpkg_repo_impl(repo_ctx):
                         ),
                     )
                 _watch_tree(repo_ctx, source_tree)
-                # `install/vcpkg-configuration.json` lives at
-                # `install/`, so vcpkg (in the sandbox) resolves `entry`
-                # against `install/`. Materialise the tree there.
-                dest = repo_ctx.path("install/{}".format(entry))
-                repo_ctx.execute(["mkdir", "-p", str(dest.dirname)])
-                repo_ctx.execute(["cp", "-R", str(source_tree), str(dest)])
 
-        repo_ctx.file("install/vcpkg-configuration.json", json.encode_indent(config, indent = "  "))
         have_scrubbed_config = True
 
     overrides_by_pkg = json.decode(repo_ctx.attr.overrides_json)
@@ -694,26 +667,6 @@ def _vcpkg_repo_impl(repo_ctx):
         "",
     ]
 
-    # Nested BUILD so vcpkg_install can reference the scrubbed manifest
-    # (and optional config) via a label pointing at the `install/` subdir.
-    # `config_data` captures any auxiliary files staged next to the config
-    # (e.g. overlay-port trees copied for `overlay-ports` entries in the
-    # config), so the install action's sandbox mirrors the config's own
-    # relative-path layout.
-    install_exports = ["vcpkg.json"]
-    if have_scrubbed_config:
-        install_exports.append("vcpkg-configuration.json")
-    install_build_lines = [
-        "exports_files({})".format(install_exports),
-        "",
-        "filegroup(",
-        "    name = \"config_data\",",
-        "    srcs = glob([\"**/*\"], exclude = [\"BUILD.bazel\", \"vcpkg.json\"], allow_empty = True),",
-        "    visibility = [\"//visibility:public\"],",
-        ")",
-        "",
-    ]
-    repo_ctx.file("install/BUILD.bazel", "\n".join(install_build_lines))
     lines = [
         "load(\"@rules_foreign_cc//foreign_cc:vcpkg.bzl\", \"vcpkg_install\", \"vcpkg_export\")",
         "load(\"@rules_foreign_cc//foreign_cc/private/framework:platform.bzl\", \"vcpkg_triplet_info_from_mappings\")",
@@ -739,15 +692,14 @@ def _vcpkg_repo_impl(repo_ctx):
         "    name = \"{}\",".format(vcpkg_install_target_name),
         "    root = \"@{}//:srcs\",".format(repo_ctx.attr.vcpkg_root),
         "    root_file = \"@{}//:.vcpkg-root\",".format(repo_ctx.attr.vcpkg_root),
-        "    manifest = \"//install:vcpkg.json\",",
+        "    manifest = \"{}\",".format(repo_ctx.attr.manifest),
         "    triplet = \":{}\",".format(triplet_info_target),
     ]
     if declared_features:
         install_block.append("    features_flag = \":features\",")
         install_block.append("    declared_features = {},".format(declared_features))
     if have_scrubbed_config:
-        install_block.append("    vcpkg_configuration = \"//install:vcpkg-configuration.json\",")
-        install_block.append("    config_data = \"//install:config_data\",")
+        install_block.append("    vcpkg_configuration = \"{}\",".format(repo_ctx.attr.vcpkg_configuration))
     if repo_ctx.attr.overlay_ports:
         install_block.append("    overlay_ports = [")
         for lbl in repo_ctx.attr.overlay_ports:
