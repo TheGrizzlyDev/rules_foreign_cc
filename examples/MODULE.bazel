@@ -214,4 +214,26 @@ vcpkg.source(
     manifest = "//vcpkg_features:vcpkg.json",
 )
 
-use_repo(vcpkg, "vcpkg_deps", "vcpkg_overlay_deps", "vcpkg_root_git_deps", "vcpkg_features_deps")
+# Overlay port declared via vcpkg-configuration.json's `overlay-ports`
+# field rather than via `vcpkg.source(overlay_ports=...)`. The config is
+# the source of truth for overlays when it's declared on `vcpkg.source`.
+vcpkg.source(
+    name = "vcpkg_config_overlay_deps",
+    manifest = "//vcpkg_config_overlay:vcpkg.json",
+    vcpkg_configuration = "//vcpkg_config_overlay:vcpkg-configuration.json",
+)
+
+vcpkg.package_override(
+    source = "vcpkg_config_overlay_deps",
+    package = "config-overlay-test",
+    out_headers_only = True,
+)
+
+use_repo(
+    vcpkg,
+    "vcpkg_deps",
+    "vcpkg_overlay_deps",
+    "vcpkg_root_git_deps",
+    "vcpkg_features_deps",
+    "vcpkg_config_overlay_deps",
+)

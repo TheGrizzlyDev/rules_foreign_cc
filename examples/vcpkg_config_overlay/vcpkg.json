@@ -1,0 +1,5 @@
+{
+  "name": "vcpkg-config-overlay-example",
+  "version-string": "0.0.0",
+  "dependencies": ["config-overlay-test"]
+}

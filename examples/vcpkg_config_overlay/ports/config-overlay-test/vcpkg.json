@@ -1,0 +1,5 @@
+{
+  "name": "config-overlay-test",
+  "version": "1.0.0",
+  "description": "Header-only overlay port declared via vcpkg-configuration.json's overlay-ports field."
+}

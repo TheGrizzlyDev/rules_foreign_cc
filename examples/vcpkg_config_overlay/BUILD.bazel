@@ -1,0 +1,7 @@
+exports_files(["vcpkg.json", "vcpkg-configuration.json"])
+
+cc_binary(
+    name = "main",
+    srcs = ["main.cpp"],
+    deps = ["@vcpkg_config_overlay_deps//:config-overlay-test"],
+)

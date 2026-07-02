@@ -662,10 +662,14 @@ def _vcpkg_install_impl(ctx):
         "  --downloads-root=\"$$EXT_BUILD_ROOT$$/{}/downloads\" \\".format(scratch_dir.path),
         "  --x-asset-sources=\"x-block-origin;x-script,$$EXT_BUILD_ROOT$$/{} {{sha512}} {{url}} {{dst}}\" \\".format(serve_script.path),
     ]
-    for d in overlay_ports_dirs:
-        install_cmd_lines.append("  --overlay-ports=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
-    for d in overlay_triplets_dirs:
-        install_cmd_lines.append("  --overlay-triplets=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
+    # When a vcpkg_configuration is set, vcpkg auto-loads its overlays;
+    # label-declared overlays remain declared inputs (for Bazel dep
+    # tracking) but aren't threaded through the CLI.
+    if config_file == None:
+        for d in overlay_ports_dirs:
+            install_cmd_lines.append("  --overlay-ports=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
+        for d in overlay_triplets_dirs:
+            install_cmd_lines.append("  --overlay-triplets=\"$$EXT_BUILD_ROOT$$/{}\" \\".format(d))
     selected_features = []
     if ctx.attr.features_flag != None:
         selected_features = ctx.attr.features_flag[BuildSettingInfo].value
@@ -697,6 +701,8 @@ def _vcpkg_install_impl(ctx):
     declared_inputs_final = declared_inputs + download_files + [serve_script, vcpkg_cli] + overlay_inputs
     if config_file != None:
         declared_inputs_final = declared_inputs_final + [config_file]
+    if ctx.attr.config_data != None:
+        declared_inputs_final = declared_inputs_final + ctx.attr.config_data[DefaultInfo].files.to_list()
     inputs = InputFiles(
         headers = [],
         include_dirs = [],
@@ -769,6 +775,16 @@ _VCPKG_INSTALL_ATTRS.update({
     ),
     "overlay_triplets": attr.label_list(
         doc = "Directories passed to vcpkg as --overlay-triplets.",
+        allow_files = True,
+    ),
+    "config_data": attr.label(
+        doc = (
+            "Optional filegroup of extra files that live in the same " +
+            "directory as `vcpkg_configuration` (e.g. overlay-port trees " +
+            "referenced by relative paths in the config). Staged into the " +
+            "install action's sandbox so vcpkg resolves the config's " +
+            "relative paths correctly."
+        ),
         allow_files = True,
     ),
     "features_flag": attr.label(
