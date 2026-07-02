@@ -605,10 +605,6 @@ def _vcpkg_install_impl(ctx):
 
     triplet = _resolve_triplet(ctx)
 
-    # TODO(TheGrizzlyDev): support --overlay-ports and --overlay-triplets, with
-    # the directories staged into the install action's sandbox. Triplets
-    # discovered via overlay_triplets should also be valid keys for
-    # vcpkg.triplet_mapping.
     # Redirect every mutable vcpkg dir out of VCPKG_ROOT into this target's
     # action-private scratch directory so the vcpkg root archive stays
     # immutable and concurrent actions don't fight over a shared

@@ -1373,7 +1373,6 @@ def _vcpkg_mod(module_ctx):
             )
     return None
 
-# TODO(TheGrizzlyDev): automatically use the right triplet for a given platform
 vcpkg = module_extension(
     implementation = _vcpkg_mod,
     tag_classes = {
