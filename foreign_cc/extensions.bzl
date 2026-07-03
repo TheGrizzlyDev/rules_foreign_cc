@@ -454,6 +454,21 @@ def _strip_pkg_qualifiers(name):
     # the bare package name.
     return name.split("[", 1)[0].split(":", 1)[0].strip()
 
+def _feature_subsets(declared):
+    """Return every subset of `declared` (list of feature names) as a
+    sorted colon-joined key. `""` denotes the empty subset. Order in the
+    returned list is unspecified; keys themselves are stable."""
+    subsets = [""]
+    for feat in declared:
+        # For every existing subset, produce a copy with `feat` added.
+        new_subsets = []
+        for s in subsets:
+            parts = [] if s == "" else s.split(":")
+            parts = sorted(parts + [feat])
+            new_subsets.append(":".join(parts))
+        subsets = subsets + new_subsets
+    return subsets
+
 def _parse_depend_info_list(stdout):
     """Parse `vcpkg depend-info --format=list` output into {pkg: [direct_deps]}.
 
@@ -603,50 +618,69 @@ def _vcpkg_repo_impl(repo_ctx):
 
     home_dir = repo_ctx.path("{}/home".format(scratch_root))
     repo_ctx.execute(["mkdir", "-p", str(home_dir)])
+    # Enumerate every subset of the manifest's declared features. For
+    # each (triplet, subset) we run depend-info so we know exactly which
+    # packages get installed for that combination. `presence[pkg][triplet]`
+    # holds the set of subset keys (sorted, colon-joined feature names)
+    # under which the package is installed. `deps_by_triplet_by_pkg` is
+    # the union across subsets, keeping the graph we use to emit BUILD.
+    subset_keys = _feature_subsets(declared_features)
     deps_by_triplet_by_pkg = {}  # pkg -> {triplet: [direct deps]}
+    presence_by_pkg = {}  # pkg -> {triplet: [subset_key, ...]}
     manifest_dir = manifest_path.dirname
     for triplet in target_triplets:
-        triplet_scratch = "{}/depend-info/{}".format(scratch_root, triplet)
-        cmd = [
-            str(vcpkg_exe),
-            "depend-info",
-            "--format=list",
-            "--x-manifest-root={}".format(manifest_dir),
-            "--triplet={}".format(triplet),
-            "--x-install-root={}/installed".format(triplet_scratch),
-            "--x-buildtrees-root={}/buildtrees".format(triplet_scratch),
-            "--x-packages-root={}/packages".format(triplet_scratch),
-            "--downloads-root={}/downloads".format(triplet_scratch),
-        ]
-        # See capture-repo command builder above: when a config is set,
-        # vcpkg auto-loads its overlays; we don't thread label-declared
-        # overlays through the CLI in that case.
-        if not repo_ctx.attr.vcpkg_configuration:
-            for p in overlay_ports_paths:
-                cmd.append("--overlay-ports={}".format(p))
-            for p in overlay_triplets_paths:
-                cmd.append("--overlay-triplets={}".format(p))
-        for feat in declared_features:
-            cmd.append("--x-feature={}".format(feat))
-        result = repo_ctx.execute(cmd, environment = {
-            "VCPKG_ROOT": str(vcpkg_root_path),
-            "HOME": str(home_dir),
-            "VCPKG_FORCE_SYSTEM_BINARIES": "1",
-            "PATH": "{}:{}".format(cmake_bin_dir, _host_path_env(repo_ctx)),
-        })
-        if result.return_code != 0:
-            fail(
-                "vcpkg depend-info failed for triplet '{}'.\nstderr:\n{}\nstdout:\n{}".format(
-                    triplet,
-                    result.stderr,
-                    result.stdout,
-                ),
-            )
-        # vcpkg writes the dep list to stderr (stdout is empty), so parse
-        # both to be robust.
-        graph = _parse_depend_info_list(result.stdout + "\n" + result.stderr)
-        for pkg, deps in graph.items():
-            deps_by_triplet_by_pkg.setdefault(pkg, {})[triplet] = deps
+        for subset in subset_keys:
+            subset_features = [] if subset == "" else subset.split(":")
+            slug = subset if subset else "_empty"
+            triplet_scratch = "{}/depend-info/{}__{}".format(scratch_root, triplet, slug.replace(":", "_"))
+            cmd = [
+                str(vcpkg_exe),
+                "depend-info",
+                "--format=list",
+                "--x-manifest-root={}".format(manifest_dir),
+                "--triplet={}".format(triplet),
+                "--x-install-root={}/installed".format(triplet_scratch),
+                "--x-buildtrees-root={}/buildtrees".format(triplet_scratch),
+                "--x-packages-root={}/packages".format(triplet_scratch),
+                "--downloads-root={}/downloads".format(triplet_scratch),
+                "--x-no-default-features",
+            ]
+            # See capture-repo command builder above: when a config is set,
+            # vcpkg auto-loads its overlays; we don't thread label-declared
+            # overlays through the CLI in that case.
+            if not repo_ctx.attr.vcpkg_configuration:
+                for p in overlay_ports_paths:
+                    cmd.append("--overlay-ports={}".format(p))
+                for p in overlay_triplets_paths:
+                    cmd.append("--overlay-triplets={}".format(p))
+            for feat in subset_features:
+                cmd.append("--x-feature={}".format(feat))
+            result = repo_ctx.execute(cmd, environment = {
+                "VCPKG_ROOT": str(vcpkg_root_path),
+                "HOME": str(home_dir),
+                "VCPKG_FORCE_SYSTEM_BINARIES": "1",
+                "PATH": "{}:{}".format(cmake_bin_dir, _host_path_env(repo_ctx)),
+            })
+            if result.return_code != 0:
+                fail(
+                    "vcpkg depend-info failed for triplet '{}' subset '{}'.\nstderr:\n{}\nstdout:\n{}".format(
+                        triplet,
+                        subset,
+                        result.stderr,
+                        result.stdout,
+                    ),
+                )
+            # vcpkg writes the dep list to stderr (stdout is empty), so parse
+            # both to be robust.
+            graph = _parse_depend_info_list(result.stdout + "\n" + result.stderr)
+            for pkg, deps in graph.items():
+                # Union deps across subsets — a pkg's Bazel-visible deps
+                # need to be the superset so `select()`s built downstream
+                # can resolve at any active subset.
+                existing = deps_by_triplet_by_pkg.setdefault(pkg, {}).get(triplet, [])
+                merged = sorted({d: True for d in (existing + deps)}.keys())
+                deps_by_triplet_by_pkg[pkg][triplet] = merged
+                presence_by_pkg.setdefault(pkg, {}).setdefault(triplet, []).append(subset)
 
     # Emit one config_setting per unique constraint set. Two mappings that
     # share a constraint set but resolve to different triplets are an
@@ -776,6 +810,16 @@ def _vcpkg_repo_impl(repo_ctx):
         rendered = _render_override_kwarg(overrides_by_pkg.get(pkg) or {})
         if rendered:
             block += rendered
+
+        # `presence_json` tells the rule which (triplet, subset) cells
+        # this package is present in. When the active cell isn't listed,
+        # _vcpkg_export_impl returns an empty CcInfo without touching the
+        # install tree.
+        pkg_presence = presence_by_pkg.get(pkg, {})
+        block.append("    presence_json = r\"\"\"{}\"\"\",".format(json.encode(pkg_presence)))
+        if declared_features:
+            block.append("    features_flag = \":features\",")
+            block.append("    declared_features = {},".format(declared_features))
 
         by_triplet = deps_by_triplet_by_pkg.get(pkg) or {}
         non_empty = {t: d for t, d in by_triplet.items() if d}

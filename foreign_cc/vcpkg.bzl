@@ -343,6 +343,29 @@ def _vcpkg_export_impl(ctx):
 
     triplet = _resolve_triplet(ctx)
 
+    # If this package isn't present in the resolved (triplet, feature-subset)
+    # cell — e.g. the user didn't select the feature that pulls it in —
+    # return empty providers instead of trying to extract files that don't
+    # exist. Downstream cc_library targets see nothing to link, which is
+    # correct: the package genuinely wasn't installed.
+    if ctx.attr.presence_json:
+        presence = json.decode(ctx.attr.presence_json)
+        triplet_subsets = presence.get(triplet, [])
+        if triplet_subsets:
+            selected = []
+            if ctx.attr.features_flag != None:
+                selected = ctx.attr.features_flag[BuildSettingInfo].value
+            declared_set = {f: True for f in ctx.attr.declared_features}
+            active = sorted([f for f in selected if f in declared_set])
+            subset_key = ":".join(active)
+            if subset_key not in triplet_subsets:
+                return [
+                    DefaultInfo(files = depset([])),
+                    OutputGroupInfo(),
+                    CcInfo(),
+                    ForeignCcDepsInfo(artifacts = depset()),
+                ]
+
     export_dir = ctx.actions.declare_directory(ctx.attr.name + "_export")
 
     # Relative path from export_dir's parent to install_tree. Resolves at action
@@ -568,6 +591,27 @@ vcpkg_export = rule(
         "package": attr.string(
             doc = "vcpkg package name to export from the install tree.",
             mandatory = True,
+        ),
+        "presence_json": attr.string(
+            doc = (
+                "JSON `{triplet: [subset_key, ...]}` recording which " +
+                "(triplet, feature-subset) cells this package is installed " +
+                "in. Populated by the module extension from per-subset " +
+                "`depend-info` runs. Empty string skips the guard (target " +
+                "always attempts extraction)."
+            ),
+            default = "",
+        ),
+        "features_flag": attr.label(
+            doc = (
+                "Same `string_list_flag` the sibling `vcpkg_install` reads. " +
+                "Used with `presence_json` to decide whether this package " +
+                "is present in the active (triplet, subset) cell."
+            ),
+            providers = [BuildSettingInfo],
+        ),
+        "declared_features": attr.string_list(
+            doc = "Manifest-declared feature names (see `vcpkg_install.declared_features`).",
         ),
         "triplet": attr.label(
             doc = (
