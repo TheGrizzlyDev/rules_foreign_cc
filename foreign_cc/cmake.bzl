@@ -129,6 +129,7 @@ cmake(
 """
 
 load("@rules_cc//cc:defs.bzl", "CcInfo")
+load("//foreign_cc:providers.bzl", "ForeignCcCmakeInfo")
 load(
     "//foreign_cc/private:cc_toolchain_util.bzl",
     "get_flags_info",
@@ -258,6 +259,33 @@ def _create_configure_script(configureParameters):
 
     prefix = expand_locations_and_make_variables(ctx, attrs.tool_prefix, "tool_prefix", data) if attrs.tool_prefix else ""
 
+    # Merge cache entries deps publish via `ForeignCcCmakeInfo` into the
+    # user's own `cache_entries`. If two deps disagree on the same key,
+    # fail eagerly: the consumer would silently pick one otherwise, which
+    # makes vcpkg-config-file path resolution non-deterministic.
+    user_cache = dict(expand_locations_and_make_variables(ctx, ctx.attr.cache_entries, "cache_entries", data))
+    dep_cache_entries = {}  # key -> (value, source-label-str)
+    for dep in ctx.attr.deps:
+        if ForeignCcCmakeInfo not in dep:
+            continue
+        for k, v in dep[ForeignCcCmakeInfo].cache_entries.items():
+            prev = dep_cache_entries.get(k)
+            if prev != None and prev[0] != v:
+                fail(
+                    ("cmake({name}): conflicting cache entries for {key!r} " +
+                     "from ForeignCcCmakeInfo — dep {a!r} publishes {av!r}, " +
+                     "dep {b!r} publishes {bv!r}.").format(
+                        name = ctx.label,
+                        key = k,
+                        a = str(prev[1]), av = prev[0],
+                        b = str(dep.label), bv = v,
+                    ),
+                )
+            dep_cache_entries[k] = (v, dep.label)
+    for k, (v, _) in dep_cache_entries.items():
+        # User's explicit cache_entries win over anything a dep publishes.
+        user_cache.setdefault(k, v)
+
     configure_script = create_cmake_script(
         workspace_name = ctx.workspace_name,
         current_label = ctx.label,
@@ -272,7 +300,7 @@ def _create_configure_script(configureParameters):
         install_prefix = "$$INSTALLDIR$$",
         root = root,
         no_toolchain_file = no_toolchain_file,
-        user_cache = expand_locations_and_make_variables(ctx, ctx.attr.cache_entries, "cache_entries", data),
+        user_cache = user_cache,
         user_env = expand_locations_and_make_variables(ctx, ctx.attr.env, "env", data),
         options = attrs.generate_args,
         cmake_commands = cmake_commands,

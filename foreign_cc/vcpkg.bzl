@@ -11,6 +11,7 @@ load("@rules_cc//cc:defs.bzl", "CcInfo", "cc_common")
 load(
     "//foreign_cc:providers.bzl",
     "ForeignCcArtifactInfo",
+    "ForeignCcCmakeInfo",
     "ForeignCcDepsInfo",
 )
 load(
@@ -537,6 +538,18 @@ def _vcpkg_export_impl(ctx):
     # via `--output_groups=<basename>` (mirrors cc_external_rule_impl).
     output_groups = {f.basename: depset([f]) for f in binary_files}
 
+    # Publish the vcpkg install tree location + triplet so the consuming
+    # `cmake()` rule can set `VCPKG_INSTALLED_DIR` / `VCPKG_TARGET_TRIPLET`
+    # cache entries. vcpkg-shipped `<pkg>Config.cmake` files hardcode
+    # references to `${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/...`
+    # and resolve wrong to `//...` otherwise. Every vcpkg_export in a
+    # single vcpkg.source shares the same install tree so downstream sees
+    # one consistent pair.
+    cmake_info = ForeignCcCmakeInfo(cache_entries = {
+        "VCPKG_INSTALLED_DIR": "$$EXT_BUILD_ROOT$$/" + install_tree.path,
+        "VCPKG_TARGET_TRIPLET": triplet,
+    })
+
     return [
         DefaultInfo(files = depset(default_files), runfiles = runfiles),
         OutputGroupInfo(**output_groups),
@@ -545,6 +558,7 @@ def _vcpkg_export_impl(ctx):
             direct = [own_artifact],
             transitive = transitive_artifacts,
         )),
+        cmake_info,
     ]
 
 vcpkg_export = rule(

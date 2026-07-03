@@ -7,6 +7,13 @@ ForeignCcDepsInfo = provider(
     },
 )
 
+ForeignCcCmakeInfo = provider(
+    doc = "Optional cmake-integration hints a foreign_cc dep publishes to its consuming `cmake()` rule.",
+    fields = {
+        "cache_entries": "dict[str, str] of `-D`-style CMake cache entries the consumer should set at configure time.",
+    },
+)
+
 ForeignCcArtifactInfo = provider(
     doc = """Groups information about the external library install directory,
 and relative bin, include and lib directories.
