@@ -31,10 +31,14 @@ load(
 )
 load(
     "//toolchains/native_tools:tool_access.bzl",
+    "get_autoconf_data",
+    "get_automake_data",
     "get_cmake_data",
+    "get_m4_data",
     "get_make_data",
     "get_ninja_data",
     "get_pkgconfig_data",
+    "get_meson_data",
 )
 
 _DEFAULT_TRIPLET = Label("//foreign_cc/private/framework:vcpkg_triplet_info")
@@ -598,6 +602,10 @@ def _vcpkg_install_impl(ctx):
         get_ninja_data(ctx),
         get_make_data(ctx),
         get_pkgconfig_data(ctx),
+        get_autoconf_data(ctx),
+        get_automake_data(ctx),
+        get_m4_data(ctx),
+        get_meson_data(ctx),
     ]
     tools_files_paths = []
     tools_files_inputs = []
@@ -877,7 +885,6 @@ vcpkg_install = rule(
         "@rules_foreign_cc//toolchains:m4_toolchain",
         "@rules_foreign_cc//toolchains:make_toolchain",
         "@rules_foreign_cc//toolchains:meson_toolchain",
-        "@rules_foreign_cc//toolchains:cmake_toolchain",
         "@rules_foreign_cc//toolchains:ninja_toolchain",
         "@rules_foreign_cc//toolchains:cmake_toolchain",
         # "@rules_foreign_cc//toolchains:msbuild_toolchain",
