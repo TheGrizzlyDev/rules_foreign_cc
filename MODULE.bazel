@@ -55,7 +55,7 @@ use_repo(
 )
 
 vcpkg = use_extension("@rules_foreign_cc//foreign_cc:extensions.bzl", "vcpkg")
-use_repo(vcpkg, "vcpkg_cli_toolchains")
+use_repo(vcpkg, "vcpkg_cli_toolchains", "vcpkg_exec_prefix")
 
 register_toolchains(
     "@rules_foreign_cc_framework_toolchains//:all",

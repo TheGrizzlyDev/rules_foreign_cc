@@ -388,6 +388,41 @@ _vcpkg_toolchain_hub_repo = repository_rule(
     },
 )
 
+# Users pick a persistent host path for vcpkg's exec scratch dir (and
+# binary cache) via `--repo_env=RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX=...`
+# in their .bazelrc. Platform-specific variants override the generic
+# one. When all are unset the constant is empty and the install action
+# falls back to a plain `mktemp -d /tmp/...` per run (no persistence).
+_EXEC_PREFIX_ENV = "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX"
+_EXEC_PREFIX_ENV_BY_OS = {
+    "linux": "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_LINUX",
+    "mac": "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_MACOS",
+    "windows": "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_WINDOWS",
+    "freebsd": "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_BSD",
+    "openbsd": "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_BSD",
+}
+
+def _exec_prefix_from_env(module_ctx):
+    os_name = module_ctx.os.name.lower()
+    for prefix_key, env_var in _EXEC_PREFIX_ENV_BY_OS.items():
+        if os_name.startswith(prefix_key):
+            plat_value = module_ctx.getenv(env_var, "")
+            if plat_value:
+                return plat_value
+            break
+    return module_ctx.getenv(_EXEC_PREFIX_ENV, "")
+
+def _vcpkg_exec_prefix_repo_impl(repo_ctx):
+    repo_ctx.file("BUILD.bazel", "exports_files([\"defs.bzl\"])\n")
+    repo_ctx.file("defs.bzl", "EXEC_PREFIX = \"{}\"\n".format(repo_ctx.attr.exec_prefix))
+
+_vcpkg_exec_prefix_repo = repository_rule(
+    implementation = _vcpkg_exec_prefix_repo_impl,
+    attrs = {
+        "exec_prefix": attr.string(),
+    },
+)
+
 def _render_override_kwarg(override_doc):
     # Render an override doc ({"entries": [...]}) as the lines for an
     # `override_json = r"""..."""` kwarg in a vcpkg_export(...) call.
@@ -1118,6 +1153,11 @@ vcpkg_package_override = tag_class(attrs = {
 })
 
 def _vcpkg_mod(module_ctx):
+    _vcpkg_exec_prefix_repo(
+        name = "vcpkg_exec_prefix",
+        exec_prefix = _exec_prefix_from_env(module_ctx),
+    )
+
     # A tag becomes a template; each source resolves it to a concrete repo.
     # http_archive templates fetch once; git templates fan out per unique ref.
     http_templates = {}

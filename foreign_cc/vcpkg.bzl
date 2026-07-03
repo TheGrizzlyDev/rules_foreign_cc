@@ -40,6 +40,7 @@ load(
     "get_pkgconfig_data",
     "get_meson_data",
 )
+load("@vcpkg_exec_prefix//:defs.bzl", "EXEC_PREFIX")
 
 _DEFAULT_TRIPLET = Label("//foreign_cc/private/framework:vcpkg_triplet_info")
 _VCPKG_TOOLCHAIN_TYPE = Label("//toolchains:vcpkg_toolchain")
@@ -719,11 +720,26 @@ def _vcpkg_install_impl(ctx):
     # into a per-target `$SHORT` directory under $TMPDIR that has no `+`
     # in its name. Files land in the real Bazel outputs via the symlink;
     # cmake sees a `+`-free string.
+    # When the user sets RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX (via
+    # --repo_env), $SHORT lives under that prefix so vcpkg's binary
+    # cache and downloads persist between builds. Otherwise $SHORT is
+    # ephemeral under /tmp and gets removed on exit (no persistence).
+    if EXEC_PREFIX:
+        short_setup_lines = [
+            "mkdir -p \"{}\"".format(EXEC_PREFIX),
+            "SHORT=\"$(mktemp -d \"{}/rfcc-vcpkg-XXXXXX\")\"".format(EXEC_PREFIX),
+            "export VCPKG_DEFAULT_BINARY_CACHE=\"{}/binary-cache\"".format(EXEC_PREFIX),
+            "mkdir -p \"$VCPKG_DEFAULT_BINARY_CACHE\"",
+        ]
+    else:
+        short_setup_lines = [
+            "SHORT=\"$(mktemp -d /tmp/rfcc-vcpkg-XXXXXX)\"",
+            "trap 'rm -rf \"$SHORT\"' EXIT",
+        ]
     user_script_lines = [
         "mkdir -p \"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
         "export HOME=\"$$EXT_BUILD_ROOT$$/{}/home\"".format(scratch_dir.path),
-        "SHORT=\"$(mktemp -d /tmp/rfcc-vcpkg-XXXXXX)\"",
-        "trap 'rm -rf \"$SHORT\"' EXIT",
+    ] + short_setup_lines + [
         "ln -s \"$$EXT_BUILD_ROOT$$/{}\" \"$SHORT/root\"".format(ctx.file.root_file.dirname),
         "ln -s \"$$INSTALLDIR$$\" \"$SHORT/install\"",
         "mkdir -p \"$$EXT_BUILD_ROOT$$/{}/buildtrees\" \"$$EXT_BUILD_ROOT$$/{}/packages\" \"$$EXT_BUILD_ROOT$$/{}/downloads\"".format(scratch_dir.path, scratch_dir.path, scratch_dir.path),

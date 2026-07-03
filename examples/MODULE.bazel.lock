@@ -225,7 +225,7 @@
     },
     "@@rules_foreign_cc+//foreign_cc:extensions.bzl%vcpkg": {
       "general": {
-        "bzlTransitiveDigest": "zk6Dcil+Jw0UbgBNVwAYSrH7KqbuhxFY3+LrwJsUYcI=",
+        "bzlTransitiveDigest": "KSRdT232pvtB/GujlBvo4RrMf4Bt6gYu3Nsr0YBzaOg=",
         "usagesDigest": "F+jC7fKuRr/B91UnhFw1TsywJ330ak5zVRE5QjI9rUM=",
         "recordedFileInputs": {
           "@@//vcpkg.json": "96e20f4e748fea593b3f0513d23051dc133a14f32f302fc97024eac3d13abfdc",
@@ -235,8 +235,17 @@
           "@@//vcpkg_with_overlay/vcpkg.json": "0eb7452b9975bb8d2f5a16600a20cb7d927355d4ab0e1ed5a6b6a519c8ab2c63"
         },
         "recordedDirentsInputs": {},
-        "envVariables": {},
+        "envVariables": {
+          "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX": "/var/tmp/rfcc-vcpkg-test",
+          "RULES_FOREIGN_CC_VCPKG_EXEC_PREFIX_MACOS": null
+        },
         "generatedRepoSpecs": {
+          "vcpkg_exec_prefix": {
+            "repoRuleId": "@@rules_foreign_cc+//foreign_cc:extensions.bzl%_vcpkg_exec_prefix_repo",
+            "attributes": {
+              "exec_prefix": "/var/tmp/rfcc-vcpkg-test"
+            }
+          },
           "vcpkg_root_default_vcpkg_root": {
             "repoRuleId": "@@bazel_tools//tools/build_defs/repo:http.bzl%http_archive",
             "attributes": {
