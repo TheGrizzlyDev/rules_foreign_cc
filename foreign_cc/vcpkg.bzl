@@ -289,8 +289,13 @@ classify() {
       *) printf '' ;;
     esac
   else
+    # Release mode: expose release-side files under their natural paths
+    # AND preserve `debug/lib`/`debug/bin` under their original locations
+    # so vcpkg-shipped CMake config files (which reference both variants
+    # unconditionally) find every file they claim exists.
     case "$rel" in
       include/*|lib/*|bin/*|share/*|tools/*) printf '%s' "$rel" ;;
+      debug/lib/*|debug/bin/*) printf '%s' "$rel" ;;
       *) printf '' ;;
     esac
   fi
